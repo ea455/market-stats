@@ -300,6 +300,20 @@
     font-size: 20px; font-weight: 500; font-variant-numeric: tabular-nums;
   }
   .stat-note { font-size: 10px; color: var(--muted); margin-top: 4px; font-family: 'Inter', sans-serif; }
+  /* Used for $/m² and Lot size specifically, when both SFH and Condo are
+     selected — these two genuinely need separate numbers, not one blended
+     figure, so they render as two clearly-tagged lines instead of the
+     single-line .stat-value above. */
+  .stat-value-split {
+    font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums;
+    display: flex; flex-direction: column; gap: 3px;
+  }
+  .stat-value-split > div { font-size: 16px; font-weight: 500; }
+  .stat-split-tag {
+    font-family: 'Inter', sans-serif; font-size: 9px; font-weight: 700; letter-spacing: 0.05em;
+    text-transform: uppercase; color: var(--green); background: rgba(118,188,33,0.12);
+    border-radius: 4px; padding: 1px 5px; margin-right: 6px; display: inline-block;
+  }
 
   .activity-strip {
     display: flex; gap: 20px; flex-wrap: wrap;
@@ -1047,7 +1061,7 @@
     <p class="report-disclaimer">OMNI data currently reflects exclusive listings only — it is not yet a complete picture of the market. OMNI's penetration among all active listings is increasing, so figures here should be read as a growing (but still partial) sample rather than the full market.</p>
     <p class="report-last-updated" id="report-last-updated"></p>
     <div class="divider"></div>
-    <div class="filter-row hide-in-agent-view">
+    <div class="filter-row">
       <span class="filter-label">Property Type:</span>
       <div class="filter-pills" id="property-type-filter-pills"></div>
     </div>
@@ -1083,7 +1097,7 @@
           <p class="chart-hint">Never blended across Status — each one asks a different question (an active listing's price vs. what a withdrawn one gave up on), so each gets its own panel below.</p>
           <div id="residential-status-panels" class="status-panels-grid"></div>
         </div>
-        <p class="chart-hint" id="market-stats-land-note" style="display:none">Check "Residential" in the Property Type filter above to see this. Land has its own report below instead.</p>
+        <p class="chart-hint" id="market-stats-land-note" style="display:none">Check "SFH" or "Condo" in the Property Type filter above to see this. Land has its own report below instead.</p>
       </div>
       <div class="flagged-col admin-only">
         <p class="section-title">Flagged for Review</p>
@@ -1132,6 +1146,7 @@
 
       <div class="chart-grid">
         <div><div class="range-filter" id="range-filter-chart-active-over-time"></div><div class="chart-box" id="chart-active-over-time"></div></div>
+        <div id="chart-active-over-time-condo-wrap" style="display:none"><div class="chart-box" id="chart-active-over-time-condo"></div></div>
         <div class="hide-in-agent-view"><div class="range-filter" id="range-filter-chart-active-avg-price"></div><div class="chart-box" id="chart-active-avg-price"></div></div>
         <div class="hide-in-agent-view"><div class="range-filter" id="range-filter-chart-active-avg-sqm"></div><div class="chart-box" id="chart-active-avg-sqm"></div></div>
         <div class="hide-in-agent-view"><div class="range-filter" id="range-filter-chart-active-ppm2"></div><div class="chart-box" id="chart-active-ppm2"></div></div>
@@ -1194,7 +1209,7 @@
       </div>
     </div>
 
-    <div id="land-report-section" class="hide-in-agent-view">
+    <div id="land-report-section">
       <div class="divider"></div>
       <p class="section-title">Land Market Report</p>
       <p class="chart-hint" id="land-empty-note" style="display:none">No Land listings match the current Status/Price filters.</p>
@@ -1204,7 +1219,7 @@
       </div>
     </div>
 
-    <div id="sold-land-section" class="hide-in-agent-view">
+    <div id="sold-land-section">
       <div class="divider"></div>
       <p class="section-title">Sold Land Report <span style="display:flex; align-items:center; gap:10px;"><span style="font-weight:400;color:var(--grey);">(Closed listings)</span><button class="table-copy-btn" data-target="sold-land-band-table">→ CSV</button></span></p>
       <p class="chart-hint" id="sold-land-empty-note" style="display:none">No Closed Land listings in this upload.</p>
@@ -1224,8 +1239,8 @@
         <label><input type="checkbox" class="report-section-checkbox" data-section="broker" checked> Broker Performance</label>
         <label class="hide-in-agent-view"><input type="checkbox" class="report-section-checkbox" data-section="bedroom" checked> Bedroom Distribution &amp; Efficiency</label>
         <label><input type="checkbox" class="report-section-checkbox" data-section="sold" checked> Sold Market Report (Residential)</label>
-        <label class="hide-in-agent-view"><input type="checkbox" class="report-section-checkbox" data-section="land" checked> Land Market Report</label>
-        <label class="hide-in-agent-view"><input type="checkbox" class="report-section-checkbox" data-section="soldLand" checked> Sold Land Report</label>
+        <label><input type="checkbox" class="report-section-checkbox" data-section="land" checked> Land Market Report</label>
+        <label><input type="checkbox" class="report-section-checkbox" data-section="soldLand" checked> Sold Land Report</label>
       </div>
     </div>
     <div class="location-input-row">
@@ -1321,8 +1336,8 @@ function priceFilterLabelForReport() {
   if (priceFilterMin != null) return `${fmtMoney(priceFilterMin)}+`;
   return `Up to ${fmtMoney(priceFilterMax)}`;
 }
-let propertyTypeFilters = new Set(['Residential']); // any subset of PROPERTY_TYPE_PRESETS, never empty
-const PROPERTY_TYPE_PRESETS = ['Residential', 'Land'];
+let propertyTypeFilters = new Set(['SFH', 'Condo']); // any subset of PROPERTY_TYPE_PRESETS, never empty
+const PROPERTY_TYPE_PRESETS = ['SFH', 'Condo', 'Land'];
 // Sub Type is the primary signal (an exact "Land" match), but OMNI
 // occasionally exports a row with Sub Type entirely blank — falls back to
 // the top-level Property Type field in that case, which still reliably says
@@ -1333,8 +1348,81 @@ function isLandListing(d) {
   if (subType) return false; // a real, non-blank Sub Type that isn't "Land" — trust it
   return (d._csvPropertyType || '').trim().toLowerCase().includes('land');
 }
+// Sub-classifies non-land residential listings into SFH vs Condo, or null if
+// the sub-type is out of scope entirely. Per Ignacio: Single Family and
+// Condo have genuinely different $/m² economics, so blending them into one
+// "Residential" number (the old behavior) was hiding a real difference —
+// agents can now isolate either one. Townhouses are folded into Condo (their
+// $/m² economics track much closer to a condo than a standalone house).
+// "Building" (commercial-adjacent, not a home) is excluded entirely — never
+// shown under any filter, same treatment as the existing Commercial/
+// Warehouse exclusion elsewhere in this file.
+function residentialSubTypeGroup(d) {
+  const subType = (d.subType || '').trim().toLowerCase();
+  if (subType === 'building' || subType === 'buildings') return null;
+  if (subType === 'condominium' || subType === 'condo' || subType === 'townhouse' || subType === 'town house') return 'Condo';
+  // Everything else non-blank (Single Family Home, House, etc.), and blank
+  // Sub Type too — same "trust it, don't force a guess" posture as
+  // isLandListing above — defaults to SFH, the larger and more common
+  // residential category in this market.
+  return 'SFH';
+}
+function isAnyResidentialTypeSelected() { return propertyTypeFilters.has('SFH') || propertyTypeFilters.has('Condo'); }
+function isBothResidentialTypesSelected() { return propertyTypeFilters.has('SFH') && propertyTypeFilters.has('Condo'); }
+// A short, human phrase describing exactly which residential type(s) are
+// currently in scope — used throughout the report so a reader never has to
+// guess whether a given number reflects SFH, Condo, or both combined.
+function residentialTypeScopeLabel() {
+  const hasSfh = propertyTypeFilters.has('SFH'), hasCondo = propertyTypeFilters.has('Condo');
+  if (hasSfh && hasCondo) return 'SFH + Condo';
+  if (hasSfh) return 'SFH';
+  if (hasCondo) return 'Condo';
+  return '';
+}
+// A ready-to-append " (SFH + Condo)" / " (SFH)" / " (Condo)" suffix for
+// chart titles — these distribution/histogram charts stay blended when both
+// types are selected (splitting every chart into per-type series would make
+// several of them too dense to read), but every title still says exactly
+// what's included, so a blended figure is never mistaken for a single-type one.
+function residentialTypeScopeSuffix() {
+  const label = residentialTypeScopeLabel();
+  return label ? ' (' + label + ')' : '';
+}
+// Renders a single stat value as two explicit, individually-labeled numbers
+// (SFH / Condo) instead of one blended figure — used specifically for $/m²
+// and Lot size when both types are selected, since those two are the ones
+// where blending genuinely misrepresents both types (see
+// residentialTypeSplitStats' comment for why). fmtFn formats one type's raw
+// number into a display string (e.g. fmtMoney, or a rounded integer + unit).
+function splitStatValueHtml(typeSplit, fmtFn) {
+  const sfh = typeSplit && typeSplit.SFH, condo = typeSplit && typeSplit.Condo;
+  const sfhHtml = sfh && sfh.n > 0 ? fmtFn(sfh) : '—';
+  const condoHtml = condo && condo.n > 0 ? fmtFn(condo) : '—';
+  return `<div class="stat-value-split">
+    <div><span class="stat-split-tag">SFH</span> ${sfhHtml}</div>
+    <div><span class="stat-split-tag">Condo</span> ${condoHtml}</div>
+  </div>`;
+}
 function passesPropertyTypeFilter(d) {
-  return isLandListing(d) ? propertyTypeFilters.has('Land') : propertyTypeFilters.has('Residential');
+  if (isLandListing(d)) return propertyTypeFilters.has('Land');
+  const group = residentialSubTypeGroup(d);
+  if (!group) return false; // e.g. Buildings — never included regardless of filter
+  return propertyTypeFilters.has(group);
+}
+// For aggregate RESIDENTIAL stat/chart functions specifically (the Residential
+// Market Statistics panel, Sold Market Report, Year Built/Price Distribution,
+// Absorption, the $/m² comparison chart) — these have their own dedicated Land
+// counterparts elsewhere (Land Market Report, Sold Land Report) and must never
+// include a land parcel just because the Land pill happens to also be
+// checked. passesPropertyTypeFilter alone isn't enough here: it correctly
+// lets land through when 'Land' is selected, which is exactly right for a
+// literal listing table but wrong for a function whose whole design assumes
+// "this is the residential-only computation."
+function passesResidentialTypeFilter(d) {
+  if (isLandListing(d)) return false;
+  const group = residentialSubTypeGroup(d);
+  if (!group) return false;
+  return propertyTypeFilters.has(group);
 }
 let userToggledOff = new Set(); // user overrode an auto-exclude to "include"
 let priceFilterMin = null;
@@ -2155,6 +2243,48 @@ function activeSet(base, flagKeys) {
 const AREA_EXCLUDE_KEYS = ['area', 'sqm_lot_match'];
 const LOT_EXCLUDE_KEYS = ['lot', 'sqm_lot_match'];
 
+// Splits every relevant residential stat by SFH vs Condo — count, price,
+// living m², $/m², lot size, year built, beds, baths. Per Ignacio: SFH and
+// Condo are different-enough products (different price-per-size economics,
+// different lot norms, often different-era construction) that showing them
+// blended under one "Residential" figure hides real distinctions an agent
+// or client would want. Computed unconditionally regardless of what's
+// currently selected; the rendering layer decides whether to show this
+// split or the single blended figure, based on whether both SFH and Condo
+// are currently checked together. avgLot in particular is close to
+// meaningless for Condo (condos structurally don't carry their own lot) —
+// still computed here for completeness, but most callers show only the SFH
+// side for this one specific field rather than a two-type split.
+function residentialTypeSplitStats(entries, priceOf, badPriceOrArea, activeExcludeLot, activeExcludeYear) {
+  const out = {};
+  ['SFH', 'Condo'].forEach(type => {
+    const typeEntries = entries.filter(([m, d]) => residentialSubTypeGroup(d) === type);
+    const typeAll = typeEntries.map(([_, d]) => d);
+
+    let totalP = 0, totalS = 0;
+    typeEntries.forEach(([m, d]) => { const p = priceOf(d); if (p && d.sqm && !badPriceOrArea(m)) { totalP += p; totalS += d.sqm; } });
+
+    const typeSqms = typeEntries.filter(([m, d]) => d.sqm && !badPriceOrArea(m)).map(([_, d]) => d.sqm);
+    const typeLots = typeEntries.filter(([m, d]) => d.lot && !badPriceOrArea(m) && !activeExcludeLot.has(m)).map(([_, d]) => d.lot);
+    const typePrices = typeEntries.filter(([m, d]) => priceOf(d) && !badPriceOrArea(m)).map(([_, d]) => priceOf(d));
+    const typeYears = activeExcludeYear ? typeEntries.filter(([m, d]) => d.year_built && !activeExcludeYear.has(m)).map(([_, d]) => d.year_built) : [];
+    const typeBeds = typeAll.map(d => d.beds).filter(Boolean);
+    const typeBaths = typeAll.map(d => d.baths).filter(v => v != null && v > 0);
+
+    out[type] = {
+      n: typeEntries.length,
+      avgPrice: typePrices.length ? mean(typePrices) : null, medPrice: typePrices.length ? median(typePrices) : null,
+      avgSqm: typeSqms.length ? mean(typeSqms) : null, sqmN: typeSqms.length,
+      ppm2: totalS ? totalP / totalS : null,
+      avgLot: typeLots.length ? mean(typeLots) : null, lotN: typeLots.length,
+      avgYear: typeYears.length ? mean(typeYears) : null, yearN: typeYears.length,
+      avgBeds: typeBeds.length ? mean(typeBeds) : null,
+      avgBaths: typeBaths.length ? mean(typeBaths) : null,
+    };
+  });
+  return out;
+}
+
 function computeStats(onlyStatus = null) {
   const merged = mergedListings;
   const activeExcludeArea = activeSet(excludeArea, AREA_EXCLUDE_KEYS);
@@ -2172,7 +2302,7 @@ function computeStats(onlyStatus = null) {
   const matchesStatus = d => onlyStatus
     ? statusGroup(d.status) === onlyStatus
     : passesStatusFilter(d);
-  const activeEntries = Object.entries(merged).filter(([m, d]) => matchesStatus(d) && passesPriceFilter(d) && !isLandListing(d) && isReportIncluded(d));
+  const activeEntries = Object.entries(merged).filter(([m, d]) => matchesStatus(d) && passesPriceFilter(d) && passesResidentialTypeFilter(d) && isReportIncluded(d));
   const all = activeEntries.map(([_, d]) => d);
   // A bad price corrupts every price-based stat, so it's folded into the same
   // exclusion set as a bad Sq Mts value for area/price-per-m² purposes.
@@ -2191,6 +2321,7 @@ function computeStats(onlyStatus = null) {
   let totalP = 0, totalS = 0;
   activeEntries.forEach(([m, d]) => { if (d.price && d.sqm && !badPriceOrArea(m)) { totalP += d.price; totalS += d.sqm; } });
   const ppm2 = totalS ? totalP / totalS : null;
+  const typeSplit = residentialTypeSplitStats(activeEntries, d => d.price, badPriceOrArea, activeExcludeLot, activeExcludeYear);
 
   const doms = all.map(d => d.dom).filter(d => d !== undefined && d !== null);
   const avgDom = doms.length ? mean(doms) : null;
@@ -2221,7 +2352,7 @@ function computeStats(onlyStatus = null) {
   return {
     count: all.length, avgPrice, medPrice, avgSqm, sqmN: sqms.length, avgLot, lotN: lots.length,
     ppm2, avgDom, medDom, avgYear, yearN: years.length, avgBeds, avgBaths, chgCounts,
-    priceDecreaseCount, priceDecreasePct, avgDiscount, discountN: discounts.length
+    priceDecreaseCount, priceDecreasePct, avgDiscount, discountN: discounts.length, typeSplit,
   };
 }
 
@@ -2281,7 +2412,7 @@ function computeSoldOverTime() {
   const activeExcludeSoldPrice = activeSet(excludeSoldPrice, 'soldPrice');
   const badPriceOrArea = m => activeExcludeArea.has(m) || activeExcludePrice.has(m) || activeExcludeSoldPrice.has(m);
   const closedEntries = Object.entries(merged).filter(([m, d]) =>
-    d.status && d.status.trim().toLowerCase() === 'closed' && !isLandListing(d) && passesPriceFilter(d) && !badPriceOrArea(m) && d.soldDate && isReportIncluded(d)
+    d.status && d.status.trim().toLowerCase() === 'closed' && passesResidentialTypeFilter(d) && passesPriceFilter(d) && !badPriceOrArea(m) && d.soldDate && isReportIncluded(d)
   );
   const all = closedEntries.map(([_, d]) => d);
   const groups = {};
@@ -2329,7 +2460,7 @@ function computeSoldStats() {
   const activeExcludeYear = activeSet(excludeYear, 'year');
 
   const closedEntries = Object.entries(merged).filter(([m, d]) =>
-    d.status && d.status.trim().toLowerCase() === 'closed' && !isLandListing(d) && passesPriceFilter(d) && !activeExcludePrice.has(m) && !activeExcludeSoldPrice.has(m) && isReportIncluded(d) && isWithinSoldReportWindow(d)
+    d.status && d.status.trim().toLowerCase() === 'closed' && passesResidentialTypeFilter(d) && passesPriceFilter(d) && !activeExcludePrice.has(m) && !activeExcludeSoldPrice.has(m) && isReportIncluded(d) && isWithinSoldReportWindow(d)
   );
   const all = closedEntries.map(([_, d]) => d);
   const count = all.length;
@@ -2378,6 +2509,24 @@ function computeSoldStats() {
     if (d.soldPrice != null && d.sqm) { totalSoldP += d.soldPrice; totalSoldS += d.sqm; soldPpm2Points.push(d.soldPrice / d.sqm); }
   });
   const avgSoldPpm2 = totalSoldS ? totalSoldP / totalSoldS : null;
+  // Same SFH-vs-Condo split reasoning as computeStats' typeSplit (see
+  // residentialTypeSplitStats' comment) — areaOkEntries is already the
+  // right, fully-filtered population here, so this only needs to group it
+  // by type rather than re-deriving its own exclusion logic.
+  const typeSplit = {};
+  ['SFH', 'Condo'].forEach(type => {
+    const typeEntries = areaOkEntries.filter(d => residentialSubTypeGroup(d) === type);
+    let tP = 0, tS = 0;
+    typeEntries.forEach(d => { if (d.soldPrice != null && d.sqm) { tP += d.soldPrice; tS += d.sqm; } });
+    const typeSqms = typeEntries.map(d => d.sqm).filter(v => v);
+    const typeLots = typeEntries.map(d => d.lot).filter(v => v);
+    typeSplit[type] = {
+      ppm2: tS ? tP / tS : null,
+      avgSqm: typeSqms.length ? mean(typeSqms) : null, sqmN: typeSqms.length,
+      avgLot: typeLots.length ? mean(typeLots) : null, lotN: typeLots.length,
+      n: typeEntries.length,
+    };
+  });
 
   // Size distribution bands, per the report's own bucketing.
   const sizeBandListings = { 'Under 350 m²': [], '350-500 m²': [], 'Over 500 m²': [] };
@@ -2446,7 +2595,7 @@ function computeSoldStats() {
     avgSoldPpm2, sizeBands, sizeBandListings, sizeBandN,
     avgDom, medDom, domN: doms.length, fastest, slowest,
     bedroomStats, bedroomVerifiedN,
-    monthCounts, monthListings, monthNames,
+    monthCounts, monthListings, monthNames, typeSplit,
   };
 }
 
@@ -2611,18 +2760,42 @@ function buildStatusPanelHtml({ status, stats: s }) {
     : isClosed
       ? `The actual agreed sale price — what a buyer really paid, not the original asking price. This is the number that reflects real market value, not just seller expectations.`
       : `The asking price at the time this listing left Active status — never an agreed sale price, since the listing didn't close.`;
+  const bothTypes = isBothResidentialTypesSelected();
+  const scopeLabel = residentialTypeScopeLabel();
+  const ppm2Val = bothTypes
+    ? splitStatValueHtml(s.typeSplit, t => fmtMoney(t.ppm2))
+    : fmtMoney(s.ppm2);
+  // Lot size is a special case, unlike every other split stat here: Condos
+  // structurally don't carry meaningful lot data, so showing "Condo: —"
+  // next to it isn't a genuine comparison, just noise. Per Ignacio, this one
+  // drops Condo entirely and shows only the SFH figure once both types are
+  // selected, rather than a two-sided split that would mostly be blank on
+  // one side.
+  const lotVal = bothTypes
+    ? (s.typeSplit.SFH.avgLot ? Math.round(s.typeSplit.SFH.avgLot).toLocaleString() : '—')
+    : (s.avgLot ? Math.round(s.avgLot).toLocaleString() : '—');
+  const countVal = bothTypes ? splitStatValueHtml(s.typeSplit, t => t.n.toLocaleString()) : s.count;
+  const avgPriceVal = bothTypes ? splitStatValueHtml(s.typeSplit, t => fmtMoney(t.avgPrice)) : fmtMoney(s.avgPrice);
+  const medPriceVal = bothTypes ? splitStatValueHtml(s.typeSplit, t => fmtMoney(t.medPrice)) : fmtMoney(s.medPrice);
+  const avgYearVal = bothTypes ? splitStatValueHtml(s.typeSplit, t => t.avgYear ? Math.round(t.avgYear) : '—') : (s.avgYear ? Math.round(s.avgYear) : '—');
+  const avgBedsVal = bothTypes ? splitStatValueHtml(s.typeSplit, t => t.avgBeds ? t.avgBeds.toFixed(1) : '—') : (s.avgBeds ? s.avgBeds.toFixed(1) : '—');
+  const avgBathsVal = bothTypes ? splitStatValueHtml(s.typeSplit, t => t.avgBaths ? t.avgBaths.toFixed(1) : '—') : (s.avgBaths ? s.avgBaths.toFixed(1) : '—');
   const tickets = [
-    [status + ' Residential Listings', s.count, ''],
-    ['Avg Price', fmtMoney(s.avgPrice), '', priceTooltip],
-    ['Median Price', fmtMoney(s.medPrice), '', 'Half of listings priced above this, half below — less skewed by one or two ultra-luxury outliers than the average.'],
+    [status + ' ' + scopeLabel + ' Listings', countVal, ''],
+    ['Avg Price', avgPriceVal, '', priceTooltip + (bothTypes ? ' Shown separately for SFH and Condo — these are different-enough products that one blended average would describe neither well.' : '')],
+    ['Median Price', medPriceVal, '', 'Half of listings priced above this, half below — less skewed by one or two ultra-luxury outliers than the average.' + (bothTypes ? ' Shown separately for SFH and Condo.' : '')],
     ['Avg Living m²', s.avgSqm ? Math.round(s.avgSqm).toLocaleString() : '—', `n=${s.sqmN}`],
-    ['Avg Lot m²', s.avgLot ? Math.round(s.avgLot).toLocaleString() : '—', `n=${s.lotN}`],
-    ['Price / m²', fmtMoney(s.ppm2), '', `Avg Price ÷ Avg Living m² — the standard way to compare properties of different sizes on a level footing.`],
+    ['Avg Lot m²' + (bothTypes ? ' (SFH)' : (scopeLabel ? ' (' + scopeLabel + ')' : '')), lotVal, bothTypes ? `n=${s.typeSplit.SFH.lotN}` : `n=${s.lotN}`,
+      bothTypes ? 'Condo dropped from this one specifically — Condos structurally don\'t carry meaningful lot data, so this shows only the SFH figure rather than pairing it with a mostly-empty Condo number.' : null],
+    ['Price / m²' + (bothTypes ? '' : (scopeLabel ? ' (' + scopeLabel + ')' : '')), ppm2Val, '',
+      (bothTypes
+        ? 'Avg Price ÷ Avg Living m², shown separately for SFH and Condo — these two have genuinely different price-per-size economics (a house\'s price bakes in land value in a way this figure doesn\'t capture the same way a condo\'s does), so a single blended number would describe neither accurately.'
+        : `Avg Price ÷ Avg Living m² — the standard way to compare properties of different sizes on a level footing.`)],
     ['Avg DOM', s.avgDom ? s.avgDom.toFixed(1) : '—', 'median below', domTooltip],
     ['Median DOM', s.medDom != null ? s.medDom : '—', '', domTooltip],
-    ['Avg Year Built', s.avgYear ? Math.round(s.avgYear) : '—', `n=${s.yearN}`],
-    ['Avg Beds', s.avgBeds ? s.avgBeds.toFixed(1) : '—', ''],
-    ['Avg Baths', s.avgBaths ? s.avgBaths.toFixed(1) : '—', ''],
+    ['Avg Year Built', avgYearVal, bothTypes ? `n=${s.typeSplit.SFH.yearN} SFH, ${s.typeSplit.Condo.yearN} Condo` : `n=${s.yearN}`],
+    ['Avg Beds', avgBedsVal, ''],
+    ['Avg Baths', avgBathsVal, ''],
   ];
   // % w/ Price Cuts and Avg Reduction only make sense for Active listings (an ask
   // that's still live and might get cut again). Withdrawn/Expired/Pending/Canceled
@@ -2680,7 +2853,7 @@ function updateSoldScopeUI() {
 
 function renderSoldReport() {
   const section = document.getElementById('sold-report-section');
-  if (!propertyTypeFilters.has('Residential') || !statusFilters.has('Closed')) { section.style.display = 'none'; return; }
+  if (!isAnyResidentialTypeSelected() || !statusFilters.has('Closed')) { section.style.display = 'none'; return; }
   section.style.display = 'block';
 
   updateSoldScopeUI();
@@ -2698,15 +2871,36 @@ function renderSoldReport() {
 
   const grid = document.getElementById('sold-stat-grid');
   const soldDomTooltip = `Days from List Date to Pending Date for these Closed sales — the full sales process, start to finish, not just how long a listing sat before finding a buyer. This is the realistic "how long does it actually take to sell here" number, unlike an Active-listings DOM figure, which only measures how old still-unsold inventory is.`;
+  const bothTypes = isBothResidentialTypesSelected();
+  const scopeLabel = residentialTypeScopeLabel();
+  // Lot is SFH-only once both types are selected, same reasoning and same
+  // treatment as the Active/Pending panels above — Condo lot data is
+  // structurally near-empty, so pairing it with SFH's real figure isn't a
+  // genuine comparison.
+  const soldLotVal = bothTypes
+    ? (s.typeSplit.SFH.avgLot ? Math.round(s.typeSplit.SFH.avgLot).toLocaleString() : '—')
+    : (s.avgLot ? Math.round(s.avgLot).toLocaleString() : '—');
+  const soldPpm2Val = bothTypes
+    ? splitStatValueHtml(s.typeSplit, t => fmtMoney(t.ppm2))
+    : fmtMoney(s.avgSoldPpm2);
+  const soldSqmVal = bothTypes
+    ? splitStatValueHtml(s.typeSplit, t => t.avgSqm ? Math.round(t.avgSqm).toLocaleString() : '—')
+    : (s.avgSqm ? Math.round(s.avgSqm).toLocaleString() : '—');
   const tickets = [
-    ['Closed Sales', s.count, ''],
-    ['Total Sold Volume', fmtMoney(s.totalVolume), '', `Sum of every Sold Price in this group — total dollars that actually changed hands, not asking prices.`],
-    ['Avg Sold Price', fmtMoney(s.avgSoldPrice), '', `The actual agreed sale price, averaged — what buyers really paid, not what sellers originally asked.`],
+    ['Closed ' + scopeLabel + ' Sales', s.count, ''],
+    ['Total Sold Volume', fmtMoney(s.totalVolume), '', `Sum of every Sold Price in this group — total dollars that actually changed hands, not asking prices.` + (bothTypes ? ' Combines SFH and Condo into one total.' : '')],
+    ['Avg Sold Price', fmtMoney(s.avgSoldPrice), '', `The actual agreed sale price, averaged — what buyers really paid, not what sellers originally asked.` + (bothTypes ? ' Combines SFH and Condo into one figure — see Sold $/m² below for a number that\'s split by type instead.' : '')],
     ['Median Sold Price', fmtMoney(s.medSoldPrice), '', `Half of these sales priced above this, half below — less skewed by one or two ultra-luxury outliers than the average.`],
-    ['Avg Living m²', s.avgSqm ? Math.round(s.avgSqm).toLocaleString() : '—', `n=${s.sqmN}`],
-    ['Avg Lot m²', s.avgLot ? Math.round(s.avgLot).toLocaleString() : '—', `n=${s.lotN}`],
+    ['Avg Living m²' + (bothTypes ? '' : (scopeLabel ? ' (' + scopeLabel + ')' : '')), soldSqmVal,
+      bothTypes ? `n=${s.typeSplit.SFH.sqmN} SFH, ${s.typeSplit.Condo.sqmN} Condo` : `n=${s.sqmN}`,
+      bothTypes ? 'Shown separately for SFH and Condo — these two skew toward genuinely different sizes, so one blended average undersells that difference.' : null],
+    ['Avg Lot m²' + (bothTypes ? ' (SFH)' : (scopeLabel ? ' (' + scopeLabel + ')' : '')), soldLotVal, bothTypes ? `n=${s.typeSplit.SFH.lotN}` : `n=${s.lotN}`,
+      bothTypes ? 'Condo dropped from this one specifically — Condos structurally don\'t carry meaningful lot data, so this shows only the SFH figure rather than pairing it with a mostly-empty Condo number.' : null],
     ['Avg List-to-Sale Discount', s.avgListToSaleDiscount != null ? s.avgListToSaleDiscount.toFixed(1) + '%' : '—', `n=${s.discountN}`, `(List Price − Sold Price) ÷ List Price, averaged across every sale with both prices on file. A positive number means homes are selling under their final asking price (a real discount); a negative number means selling over asking (a premium).`],
-    ['Avg Sold $/m²', fmtMoney(s.avgSoldPpm2), '', `Sold Price ÷ Living m² — lets you compare properties of different sizes on equal footing, using the actual sale price rather than the ask.`],
+    ['Avg Sold $/m²' + (bothTypes ? '' : (scopeLabel ? ' (' + scopeLabel + ')' : '')), soldPpm2Val, '',
+      (bothTypes
+        ? 'Sold Price ÷ Living m², shown separately for SFH and Condo — these two have genuinely different price-per-size economics, so a single blended number would describe neither accurately.'
+        : `Sold Price ÷ Living m² — lets you compare properties of different sizes on equal footing, using the actual sale price rather than the ask.`)],
     ['Avg DOM', s.avgDom != null ? s.avgDom.toFixed(0) : '—', `n=${s.domN}`, soldDomTooltip],
     ['Median DOM', s.medDom != null ? s.medDom : '—', '', soldDomTooltip],
     ['Avg Year Built', s.avgYear ? Math.round(s.avgYear) : '—', `n=${s.yearN}`],
@@ -2789,14 +2983,37 @@ function renderSoldReport() {
     { headers: ['Month', 'Avg Sold $/m²'], rows: sppLabels.map((lb, i) => [lb, sppValues[i] == null ? '' : Math.round(sppValues[i])]) });
 
   const sizeLabels = Object.keys(s.sizeBands);
-  const sizeValues = sizeLabels.map(k => s.sizeBands[k]);
-  setChartSvg('chart-sold-size-dist', svgBarChart({
-    title: `Home Size Distribution (n=${s.sizeBandN})`, labels: sizeLabels, values: sizeValues,
-    xAxisTitle: 'Living area band', yAxisTitle: '# sold',
-    itemLists: sizeLabels.map(k => s.sizeBandListings[k].map(listingLabel)),
-    mlsLists: sizeLabels.map(k => s.sizeBandListings[k].map(d => d.mls)),
-  }), "What size homes are actually selling, among Closed listings. Why it matters: tells you which size range to focus new listings and marketing on, based on real demand rather than guesswork.",
-    { headers: ['Living Area Band', '# Sold'], rows: sizeLabels.map((k, i) => [k, sizeValues[i]]) });
+  const bothTypesForSize = isBothResidentialTypesSelected();
+  let sizeDistSvg, sizeDistCsvHeaders, sizeDistCsvRows;
+  if (bothTypesForSize) {
+    // Same reasoning as every other split in this report: SFH and Condo
+    // often skew toward genuinely different sizes, so one blended
+    // distribution would understate that difference rather than show it.
+    const sizeSeriesListings = ['SFH', 'Condo'].map(type => sizeLabels.map(k => s.sizeBandListings[k].filter(d => residentialSubTypeGroup(d) === type)));
+    sizeDistSvg = svgGroupedBarChart({
+      title: `Home Size Distribution (n=${s.sizeBandN})`, groupLabels: sizeLabels, legendPosition: 'right',
+      seriesNames: ['SFH', 'Condo'], seriesColors: [CHART_COLORS.green, '#4a9edb'],
+      seriesValues: sizeSeriesListings.map(bandsArr => bandsArr.map(l => l.length)),
+      xAxisTitle: 'Living area band', yAxisTitle: '# sold',
+      seriesItemLists: sizeSeriesListings.map(bandsArr => bandsArr.map(l => l.map(listingLabel))),
+      seriesMlsLists: sizeSeriesListings.map(bandsArr => bandsArr.map(l => l.map(d => d.mls))),
+    });
+    sizeDistCsvHeaders = ['Living Area Band', 'SFH', 'Condo'];
+    sizeDistCsvRows = sizeLabels.map((k, i) => [k, sizeSeriesListings[0][i].length, sizeSeriesListings[1][i].length]);
+  } else {
+    const sizeValues = sizeLabels.map(k => s.sizeBands[k]);
+    sizeDistSvg = svgBarChart({
+      title: `Home Size Distribution (n=${s.sizeBandN})`, labels: sizeLabels, values: sizeValues,
+      xAxisTitle: 'Living area band', yAxisTitle: '# sold',
+      itemLists: sizeLabels.map(k => s.sizeBandListings[k].map(listingLabel)),
+      mlsLists: sizeLabels.map(k => s.sizeBandListings[k].map(d => d.mls)),
+    });
+    sizeDistCsvHeaders = ['Living Area Band', '# Sold'];
+    sizeDistCsvRows = sizeLabels.map((k, i) => [k, sizeValues[i]]);
+  }
+  setChartSvg('chart-sold-size-dist', sizeDistSvg,
+    "What size homes are actually selling, among Closed listings. Why it matters: tells you which size range to focus new listings and marketing on, based on real demand rather than guesswork." + (bothTypesForSize ? ' Split into SFH and Condo since both are currently selected — these two often skew toward different sizes, which one blended bar per band would hide.' : ''),
+    { headers: sizeDistCsvHeaders, rows: sizeDistCsvRows });
 
   const seasonLabels = s.monthNames.filter(m => s.monthCounts[m]);
   const seasonValues = seasonLabels.map(m => s.monthCounts[m]);
@@ -2812,7 +3029,7 @@ function renderSoldReport() {
 }
 
 function renderLandReport() {
-  const showResidential = propertyTypeFilters.has('Residential');
+  const showResidential = isAnyResidentialTypeSelected();
   document.getElementById('market-stats-block').style.display = showResidential ? 'block' : 'none';
   document.getElementById('market-stats-land-note').style.display = showResidential ? 'none' : 'block';
 
@@ -2896,7 +3113,7 @@ function renderLandReport() {
 // that would actually appear (e.g. no Sold Market Report checkbox if "Closed"
 // isn't checked in Status, since there'd be nothing there to include anyway).
 function getReportSectionApplicability() {
-  const residential = propertyTypeFilters.has('Residential') && computeAllResidentialStats().length > 0;
+  const residential = isAnyResidentialTypeSelected() && computeAllResidentialStats().length > 0;
   const isAgent = document.body.classList.contains('agent-mode');
   return {
     residential, trends: residential,
@@ -2906,15 +3123,15 @@ function getReportSectionApplicability() {
     // — checked directly rather than duplicating that decision here, so the
     // exported report can never disagree with what's shown on screen.
     broker: residential && (() => { const el = document.getElementById('broker-performance-section'); return !el || el.style.display !== 'none'; })(),
-    // Bedroom/Land/Sold Land are hidden entirely in Agent View (per the same
-    // hide-in-agent-view sections above) — forced false here too, not just
-    // relying on the checkbox being unchecked, since buildReportHtml checks
-    // this applicability map directly and an exported report should match
-    // what's actually shown on screen.
+    // Bedroom stats stay admin-only (unrelated to the SFH/Condo/Land split).
+    // Land/Sold Land used to be forced off for Agent unconditionally — now
+    // that agents can genuinely opt into Land via the property-type pills,
+    // these follow the same "is it actually visible right now" check Admin
+    // already used, rather than a blanket per-view block.
     bedroom: residential && !isAgent,
     sold: document.getElementById('sold-report-body').style.display !== 'none',
-    land: !isAgent && document.getElementById('land-report-body').style.display !== 'none',
-    soldLand: !isAgent && document.getElementById('sold-land-body').style.display !== 'none',
+    land: document.getElementById('land-report-body').style.display !== 'none',
+    soldLand: document.getElementById('sold-land-body').style.display !== 'none',
     aiAnalysis: residential || (document.getElementById('land-report-body').style.display !== 'none'),
   };
 }
@@ -3118,7 +3335,7 @@ function listingEndDate(d) {
 // "Closed" isn't currently checked, not because there weren't any, but because they
 // were filtered out before the calculation ever saw them.
 function allResidentialEntries() {
-  return Object.values(mergedListings).filter(d => !isLandListing(d) && passesPriceFilter(d) && isReportIncluded(d));
+  return Object.values(mergedListings).filter(d => passesResidentialTypeFilter(d) && passesPriceFilter(d) && isReportIncluded(d));
 }
 
 // A stable "as of" reference date — the latest real date found anywhere in the
@@ -3162,11 +3379,18 @@ function asOfDateFor(entries) {
 
 // #13 — Active listings over time: for every month in the data's range, count
 // listings that were active (started by that month, hadn't ended yet) during it.
-function computeActiveOverTime(floorKey = null) {
-  const entries = allResidentialEntries().filter(d => d.listDate);
-  if (!entries.length) return { labels: [], dates: [], counts: [], monthListings: [] };
-  const asOf = asOfDateFor(entries);
-  let startKey = monthKey(entries.reduce((min, d) => (d.listDate < min ? d.listDate : min), entries[0].listDate));
+function computeActiveOverTime(floorKey = null, typeFilter = null) {
+  const baseEntries = allResidentialEntries().filter(d => d.listDate);
+  if (!baseEntries.length) return { labels: [], dates: [], counts: [], monthListings: [] };
+  // asOf/months/snapshotDates are always computed off the FULL residential
+  // population (both types), even when typeFilter narrows which listings
+  // actually get counted below. This keeps the timeline identical whether
+  // this runs for SFH, Condo, or the original blended view — so two
+  // type-specific series drawn on the same chart always share the same
+  // x-axis, rather than silently drifting apart if one type happened to
+  // have no recent listing activity of its own.
+  const asOf = asOfDateFor(baseEntries);
+  let startKey = monthKey(baseEntries.reduce((min, d) => (d.listDate < min ? d.listDate : min), baseEntries[0].listDate));
   if (floorKey && startKey < floorKey) startKey = floorKey;
   const endKey = monthKey(asOf.toISOString().slice(0, 10));
   const months = monthRangeKeys(startKey, endKey);
@@ -3178,6 +3402,7 @@ function computeActiveOverTime(floorKey = null) {
     const lastDay = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0);
     return lastDay > asOf ? asOf : lastDay;
   });
+  const entries = typeFilter ? baseEntries.filter(d => residentialSubTypeGroup(d) === typeFilter) : baseEntries;
   const monthListings = snapshotDates.map((snapshot, i) => {
     const isLastSnapshot = i === snapshotDates.length - 1;
     return entries.filter(d => {
@@ -3299,7 +3524,7 @@ function computeAbsorption() {
   const activeExcludeSoldPrice = activeSet(excludeSoldPrice, 'soldPrice');
   const badPriceOrArea = m => activeExcludeArea.has(m) || activeExcludePrice.has(m) || activeExcludeSoldPrice.has(m);
   const closedEntries = Object.entries(merged).filter(([m, d]) =>
-    d.status && d.status.trim().toLowerCase() === 'closed' && !isLandListing(d) && passesPriceFilter(d) && !badPriceOrArea(m) && d.soldDate && isReportIncluded(d)
+    d.status && d.status.trim().toLowerCase() === 'closed' && passesResidentialTypeFilter(d) && passesPriceFilter(d) && !badPriceOrArea(m) && d.soldDate && isReportIncluded(d)
   ).map(([_, d]) => d);
   const soldGroups = {};
   closedEntries.forEach(d => { const mk = monthKey(d.soldDate); if (mk) (soldGroups[mk] = soldGroups[mk] || []).push(d); });
@@ -3564,15 +3789,11 @@ function r(v, decimals = 0) {
 }
 function buildAiAnalysisDigest() {
   const area = (document.getElementById('report-location-input').value || currentAreaTag || '').trim() || 'this area';
-  const isAgent = document.body.classList.contains('agent-mode');
-  // Agent View is residential-only by design (the Land report panels are
-  // hidden there entirely — see getReportSectionApplicability's `land`
-  // check), so the AI write-up shouldn't reference land data in that
-  // context regardless of what the Property Type filter happens to be set
-  // to. In Admin view, land is only included if that filter is genuinely
-  // selected — matching what's actually on screen rather than always
-  // pulling land stats in behind the scenes.
-  const includeLand = !isAgent && propertyTypeFilters.has('Land');
+  // Land is included whenever it's genuinely selected — Agent View is no
+  // longer residential-only-by-default; agents can opt into Land via the
+  // Property Type filter same as Admin, and when they do, the AI write-up
+  // should reflect exactly what's on screen rather than silently omitting it.
+  const includeLand = propertyTypeFilters.has('Land');
 
   // Active/Pending DOM is fundamentally a different kind of number than
   // Closed DOM: it's how long a listing has been sitting UNSOLD as of
@@ -3588,25 +3809,83 @@ function buildAiAnalysisDigest() {
   // model can't casually treat two differently-named fields as
   // interchangeable the way it might two identically-named ones.
   const STILL_OPEN_STATUSES = new Set(['Active', 'Pending']);
+  const bothTypesSelected = isBothResidentialTypesSelected();
   const residentialByStatus = computeAllResidentialStats()
+    .filter(({ stats }) => stats.count > 0)
     .map(({ status, stats }) => {
       const stillOpen = STILL_OPEN_STATUSES.has(status);
       const domFields = stillOpen
         ? { avgDaysOnMarketSoFar_NOTfinal: r(stats.avgDom), medDaysOnMarketSoFar_NOTfinal: r(stats.medDom) }
         : { avgDom: r(stats.avgDom), medDom: r(stats.medDom) };
-      return {
-        status, count: stats.count, avgPrice: r(stats.avgPrice), medPrice: r(stats.medPrice),
-        pricePerM2: r(stats.ppm2), ...domFields,
-        avgDiscountPct: r(stats.avgDiscount, 1), discountSampleN: stats.discountN,
+      // Every size/count/price/demographic stat here splits by SFH vs Condo
+      // when both are selected — these are different-enough products (see
+      // the tool's own UI, which shows the identical split for the same
+      // reason) that a single blended figure would be actively misleading
+      // rather than just less detailed. When only one type is selected, the
+      // plain (non-split) fields already describe just that one type, so no
+      // split is needed. Lot size is the one exception: it's SFH-only even
+      // in split mode, never paired with a Condo figure, since Condos
+      // structurally don't carry meaningful lot data (same reasoning, same
+      // decision the UI itself makes for this specific field).
+      const typeFields = bothTypesSelected ? {
+        count_bySFHvsCondo_neverBlend: { SFH: stats.typeSplit.SFH.n, Condo: stats.typeSplit.Condo.n },
+        avgPrice_bySFHvsCondo_neverBlend: {
+          SFH: stats.typeSplit.SFH.n > 0 ? r(stats.typeSplit.SFH.avgPrice) : null,
+          Condo: stats.typeSplit.Condo.n > 0 ? r(stats.typeSplit.Condo.avgPrice) : null,
+        },
+        medPrice_bySFHvsCondo_neverBlend: {
+          SFH: stats.typeSplit.SFH.n > 0 ? r(stats.typeSplit.SFH.medPrice) : null,
+          Condo: stats.typeSplit.Condo.n > 0 ? r(stats.typeSplit.Condo.medPrice) : null,
+        },
+        pricePerM2_bySFHvsCondo_neverBlend: {
+          SFH: stats.typeSplit.SFH.n > 0 ? r(stats.typeSplit.SFH.ppm2) : null,
+          Condo: stats.typeSplit.Condo.n > 0 ? r(stats.typeSplit.Condo.ppm2) : null,
+        },
+        avgLotM2_SFHonly: stats.typeSplit.SFH.avgLot != null ? r(stats.typeSplit.SFH.avgLot) : null,
+        avgYear_bySFHvsCondo_neverBlend: {
+          SFH: stats.typeSplit.SFH.yearN > 0 ? r(stats.typeSplit.SFH.avgYear) : null,
+          Condo: stats.typeSplit.Condo.yearN > 0 ? r(stats.typeSplit.Condo.avgYear) : null,
+        },
+        avgBeds_bySFHvsCondo_neverBlend: {
+          SFH: stats.typeSplit.SFH.avgBeds != null ? r(stats.typeSplit.SFH.avgBeds, 1) : null,
+          Condo: stats.typeSplit.Condo.avgBeds != null ? r(stats.typeSplit.Condo.avgBeds, 1) : null,
+        },
+        avgBaths_bySFHvsCondo_neverBlend: {
+          SFH: stats.typeSplit.SFH.avgBaths != null ? r(stats.typeSplit.SFH.avgBaths, 1) : null,
+          Condo: stats.typeSplit.Condo.avgBaths != null ? r(stats.typeSplit.Condo.avgBaths, 1) : null,
+        },
+      } : {
+        count: stats.count, avgPrice: r(stats.avgPrice), medPrice: r(stats.medPrice),
+        pricePerM2: r(stats.ppm2), avgLotM2: r(stats.avgLot),
         avgBeds: r(stats.avgBeds, 1), avgBaths: r(stats.avgBaths, 1),
       };
-    })
-    .filter(s => s.count > 0);
+      return {
+        status, ...typeFields, ...domFields,
+        avgDiscountPct: r(stats.avgDiscount, 1), discountSampleN: stats.discountN,
+      };
+    });
 
   const soldRaw = computeSoldStats();
+  const soldSizeFields = bothTypesSelected ? {
+    avgSqm_bySFHvsCondo_neverBlend: {
+      SFH: soldRaw.typeSplit.SFH.sqmN > 0 ? r(soldRaw.typeSplit.SFH.avgSqm) : null,
+      Condo: soldRaw.typeSplit.Condo.sqmN > 0 ? r(soldRaw.typeSplit.Condo.avgSqm) : null,
+    },
+    avgSoldPricePerM2_bySFHvsCondo_neverBlend: {
+      SFH: soldRaw.typeSplit.SFH.n > 0 ? r(soldRaw.typeSplit.SFH.ppm2) : null,
+      Condo: soldRaw.typeSplit.Condo.n > 0 ? r(soldRaw.typeSplit.Condo.ppm2) : null,
+    },
+    // SFH-only, not a two-type split — same reasoning as residentialByStatus's
+    // avgLotM2_SFHonly above.
+    avgLotM2_SFHonly: soldRaw.typeSplit.SFH.avgLot != null ? r(soldRaw.typeSplit.SFH.avgLot) : null,
+  } : {
+    avgSqm: r(soldRaw.avgSqm),
+    avgSoldPricePerM2: r(soldRaw.avgSoldPpm2),
+    avgLotM2: r(soldRaw.avgLot),
+  };
   const soldResidential = soldRaw.count > 0 ? {
     count: soldRaw.count, avgSoldPrice: r(soldRaw.avgSoldPrice), medSoldPrice: r(soldRaw.medSoldPrice),
-    avgSoldPricePerM2: r(soldRaw.avgSoldPpm2), avgListToSaleDiscountPct: r(soldRaw.avgListToSaleDiscount, 1),
+    ...soldSizeFields, avgListToSaleDiscountPct: r(soldRaw.avgListToSaleDiscount, 1),
     avgDom: r(soldRaw.avgDom), medDom: r(soldRaw.medDom), sizeBandCounts: soldRaw.sizeBands,
     avgBeds: r(soldRaw.avgBeds, 1), avgBaths: r(soldRaw.avgBaths, 1),
   } : null;
@@ -3832,7 +4111,7 @@ async function refreshAllAiAnalyses() {
         userToggledOff = new Set();
         priceFilterMin = null; priceFilterMax = null;
         statusFilters = new Set(['Active', 'Closed']);
-        propertyTypeFilters = new Set(['Residential']);
+        propertyTypeFilters = new Set(['SFH', 'Condo']);
         soldReportAllTime = false;
 
         const digest = buildAiAnalysisDigest();
@@ -4953,28 +5232,36 @@ function setChartSvg(elOrId, svgHtml, infoText, csvData) {
 // for (the overpricing warning this chart exists to surface), green if it's
 // ever reversed. Falls back gracefully to just the bars with no gap
 // annotation if either side has no data at all to compare.
-function svgActiveClosedPpm2Chart({ w = 460, h = 280, activeGroup, closedGroup }) {
-  const pad = { top: 74, right: 40, bottom: 46, left: 40 };
+function svgActiveClosedPpm2Chart({ w = 460, h = 280, pairs }) {
+  // pairs: 1 or 2 entries of { label, activeGroup, closedGroup } — 1 pair
+  // reproduces the original single Active-vs-Closed comparison (no type
+  // split in effect); 2 pairs happens when both SFH and Condo are selected,
+  // showing Active-vs-Closed separately within EACH type side by side
+  // instead of blending SFH and Condo into one number — the entire reason
+  // this chart exists is to expose a real pricing gap, and blending two
+  // types with different $/m² economics would hide exactly the gap a
+  // second type-specific comparison would reveal.
+  const multiPair = pairs.length > 1;
+  if (multiPair) w = Math.max(w, 620);
+  const barW = multiPair ? 76 : 108;
+  const innerGap = multiPair ? 54 : 96;
+  const betweenPairsGap = 70;
+  const pairW = barW * 2 + innerGap;
+  const totalPairsW = pairW * pairs.length + betweenPairsGap * (pairs.length - 1);
+  const pad = { top: multiPair ? 34 : 74, right: 40, bottom: 46, left: 40 };
   const cw = w - pad.left - pad.right;
   const chH = h - pad.top - pad.bottom;
-  const barW = 108, gap = 96;
-  const totalW = barW * 2 + gap;
-  const startX = pad.left + (cw - totalW) / 2;
-  const barX1 = startX, barX2 = startX + barW + gap;
+  const startX = pad.left + (cw - totalPairsW) / 2;
   const baseY = pad.top + chH;
 
-  const aVal = activeGroup.avgPpm2, cVal = closedGroup.avgPpm2;
-  const maxV = Math.max(aVal || 0, cVal || 0, 1);
-  // Headroom reserved above the tallest possible bar for its own value
-  // label. Without this, whichever bar is larger always scales to exactly
-  // chH (100% of the plot area, by definition of maxV) — meaning its value
-  // label, drawn just above the bar, has nowhere to go but into the
-  // narrative text above it. This isn't specific to any one data set: it
-  // happens for the taller bar every time, regardless of the actual values.
-  const labelHeadroom = 26;
+  const allVals = pairs.flatMap(p => [p.activeGroup.avgPpm2, p.closedGroup.avgPpm2]).filter(v => v != null);
+  const maxV = Math.max(...allVals, 1);
+  // Headroom reserved above the tallest possible bar for its own value label
+  // (and, in multi-pair mode, that pair's local headline too) — without
+  // this, whichever bar is tallest always scales to exactly 100% of the
+  // plot area, leaving its label nowhere to go but into the title above it.
+  const labelHeadroom = multiPair ? 50 : 26;
   const barH = v => v == null ? 0 : Math.max((v / maxV) * (chH - labelHeadroom), 2);
-  const aH = barH(aVal), cH = barH(cVal);
-  const aY = baseY - aH, cY = baseY - cH;
 
   const dataAttrs = g => {
     if (!g.validEntries.length) return '';
@@ -4985,48 +5272,67 @@ function svgActiveClosedPpm2Chart({ w = 460, h = 280, activeGroup, closedGroup }
   const bar = (x, y, hgt, fill, g, delay) =>
     `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW}" height="${hgt.toFixed(1)}" rx="7" fill="${fill}" class="chart-bar-v" style="animation-delay:${delay}s"${dataAttrs(g)}/>`;
   const valueLabel = (x, y, val) => val == null ? '' :
-    `<text x="${(x + barW / 2).toFixed(1)}" y="${(y - 10).toFixed(1)}" text-anchor="middle" font-size="14" font-weight="700" font-family="${CHART_MONO}" fill="${CHART_COLORS.text}" pointer-events="none">$${Math.round(val).toLocaleString()}</text>`;
+    `<text x="${(x + barW / 2).toFixed(1)}" y="${(y - 10).toFixed(1)}" text-anchor="middle" font-size="${multiPair ? 12 : 14}" font-weight="700" font-family="${CHART_MONO}" fill="${CHART_COLORS.text}" pointer-events="none">$${Math.round(val).toLocaleString()}</text>`;
   const belowLabel = (x, g) =>
     `<text x="${(x + barW / 2).toFixed(1)}" y="${(baseY + 18).toFixed(1)}" text-anchor="middle" font-size="11" font-weight="700" font-family="${CHART_MONO}" fill="${g.color}" pointer-events="none">${chartEsc(g.name.toUpperCase())}</text>` +
     `<text x="${(x + barW / 2).toFixed(1)}" y="${(baseY + 32).toFixed(1)}" text-anchor="middle" font-size="9" font-family="${CHART_MONO}" fill="${CHART_COLORS.muted}" pointer-events="none">n=${g.validEntries.length}</text>`;
 
-  let bars = bar(barX1, aY, aH, activeGroup.color, activeGroup, 0) + bar(barX2, cY, cH, closedGroup.color, closedGroup, 0.08);
-  bars += valueLabel(barX1, aY, aVal) + valueLabel(barX2, cY, cVal);
-  bars += belowLabel(barX1, activeGroup) + belowLabel(barX2, closedGroup);
+  let bars = '', headlineText = '', bracket = '';
+  pairs.forEach((pair, pairIdx) => {
+    const pairX = startX + pairIdx * (pairW + betweenPairsGap);
+    const barX1 = pairX, barX2 = pairX + barW + innerGap;
+    const { activeGroup, closedGroup } = pair;
+    const aVal = activeGroup.avgPpm2, cVal = closedGroup.avgPpm2;
+    const aH = barH(aVal), cH = barH(cVal);
+    const aY = baseY - aH, cY = baseY - cH;
 
-  let headline = '', bracket = '';
-  if (aVal != null && cVal != null) {
-    const diffAbs = aVal - cVal;
-    const diffPct = cVal ? (diffAbs / cVal * 100) : null;
-    const sign = diffAbs > 0 ? '+' : (diffAbs < 0 ? '−' : '');
-    const pctText = diffPct != null ? ` (${sign}${Math.abs(diffPct).toFixed(0)}%)` : '';
-    const dollarText = `${sign}$${Math.abs(Math.round(diffAbs)).toLocaleString()}/m²${pctText}`;
-    const narrative = diffAbs > 0 ? 'Active is priced above what Closed sold for'
-      : diffAbs < 0 ? 'Active is priced below what Closed sold for'
-      : 'Active matches what Closed sold for';
-    const headlineColor = diffAbs > 0 ? CHART_COLORS.red : diffAbs < 0 ? CHART_COLORS.green : CHART_COLORS.muted;
-    headline = `
-      <text x="${w / 2}" y="40" text-anchor="middle" font-size="19" font-weight="800" font-family="${CHART_MONO}" fill="${headlineColor}">${chartEsc(dollarText)}</text>
-      <text x="${w / 2}" y="56" text-anchor="middle" font-size="10" font-family="${CHART_MONO}" fill="${CHART_COLORS.muted}">${chartEsc(narrative)}</text>`;
+    bars += bar(barX1, aY, aH, activeGroup.color, activeGroup, 0) + bar(barX2, cY, cH, closedGroup.color, closedGroup, 0.08);
+    bars += valueLabel(barX1, aY, aVal) + valueLabel(barX2, cY, cVal);
+    bars += belowLabel(barX1, activeGroup) + belowLabel(barX2, closedGroup);
 
-    // Dashed reference line at the shorter bar's height, spanning both bars,
-    // plus a bracket in the gap between them connecting up to the taller top.
-    const dashedY = Math.max(aY, cY);
-    const tallerTopY = Math.min(aY, cY);
-    bracket += `<line x1="${(barX1 - 6).toFixed(1)}" y1="${dashedY.toFixed(1)}" x2="${(barX2 + barW + 6).toFixed(1)}" y2="${dashedY.toFixed(1)}" stroke="${CHART_COLORS.muted}" stroke-width="1" stroke-dasharray="4,3" opacity="0.5"/>`;
-    if (dashedY - tallerTopY > 6) {
-      const bx = barX1 + barW + gap / 2;
-      bracket += `<line x1="${bx.toFixed(1)}" y1="${dashedY.toFixed(1)}" x2="${bx.toFixed(1)}" y2="${tallerTopY.toFixed(1)}" stroke="${headlineColor}" stroke-width="1.5" opacity="0.7"/>`;
-      bracket += `<line x1="${(bx - 5).toFixed(1)}" y1="${dashedY.toFixed(1)}" x2="${(bx + 5).toFixed(1)}" y2="${dashedY.toFixed(1)}" stroke="${headlineColor}" stroke-width="1.5" opacity="0.7"/>`;
-      bracket += `<line x1="${(bx - 5).toFixed(1)}" y1="${tallerTopY.toFixed(1)}" x2="${(bx + 5).toFixed(1)}" y2="${tallerTopY.toFixed(1)}" stroke="${headlineColor}" stroke-width="1.5" opacity="0.7"/>`;
+    if (aVal != null && cVal != null) {
+      const diffAbs = aVal - cVal;
+      const diffPct = cVal ? (diffAbs / cVal * 100) : null;
+      const sign = diffAbs > 0 ? '+' : (diffAbs < 0 ? '−' : '');
+      const pctText = diffPct != null ? ` (${sign}${Math.abs(diffPct).toFixed(0)}%)` : '';
+      const dollarText = (pair.label ? pair.label + ': ' : '') + `${sign}$${Math.abs(Math.round(diffAbs)).toLocaleString()}/m²${pctText}`;
+      const headlineColor = diffAbs > 0 ? CHART_COLORS.red : diffAbs < 0 ? CHART_COLORS.green : CHART_COLORS.muted;
+      const pairCenterX = (barX1 + barX2 + barW) / 2;
+      if (multiPair) {
+        // Small, localized headline directly above this pair's own bars —
+        // two full-size global headlines (like the single-pair case uses)
+        // wouldn't both fit, and putting one above each pair keeps the
+        // "which number goes with which type" association unambiguous.
+        const localY = Math.min(aY, cY) - 32;
+        headlineText += `<text x="${pairCenterX.toFixed(1)}" y="${localY.toFixed(1)}" text-anchor="middle" font-size="13" font-weight="800" font-family="${CHART_MONO}" fill="${headlineColor}">${chartEsc(dollarText)}</text>`;
+      } else {
+        const narrative = diffAbs > 0 ? 'Active is priced above what Closed sold for'
+          : diffAbs < 0 ? 'Active is priced below what Closed sold for'
+          : 'Active matches what Closed sold for';
+        headlineText += `
+          <text x="${w / 2}" y="40" text-anchor="middle" font-size="19" font-weight="800" font-family="${CHART_MONO}" fill="${headlineColor}">${chartEsc(dollarText)}</text>
+          <text x="${w / 2}" y="56" text-anchor="middle" font-size="10" font-family="${CHART_MONO}" fill="${CHART_COLORS.muted}">${chartEsc(narrative)}</text>`;
+      }
+
+      // Dashed reference line at the shorter bar's height, spanning both bars
+      // in this pair, plus a bracket in the gap connecting up to the taller top.
+      const dashedY = Math.max(aY, cY);
+      const tallerTopY = Math.min(aY, cY);
+      bracket += `<line x1="${(barX1 - 6).toFixed(1)}" y1="${dashedY.toFixed(1)}" x2="${(barX2 + barW + 6).toFixed(1)}" y2="${dashedY.toFixed(1)}" stroke="${CHART_COLORS.muted}" stroke-width="1" stroke-dasharray="4,3" opacity="0.5"/>`;
+      if (dashedY - tallerTopY > 6) {
+        const bx = barX1 + barW + innerGap / 2;
+        bracket += `<line x1="${bx.toFixed(1)}" y1="${dashedY.toFixed(1)}" x2="${bx.toFixed(1)}" y2="${tallerTopY.toFixed(1)}" stroke="${headlineColor}" stroke-width="1.5" opacity="0.7"/>`;
+        bracket += `<line x1="${(bx - 5).toFixed(1)}" y1="${dashedY.toFixed(1)}" x2="${(bx + 5).toFixed(1)}" y2="${dashedY.toFixed(1)}" stroke="${headlineColor}" stroke-width="1.5" opacity="0.7"/>`;
+        bracket += `<line x1="${(bx - 5).toFixed(1)}" y1="${tallerTopY.toFixed(1)}" x2="${(bx + 5).toFixed(1)}" y2="${tallerTopY.toFixed(1)}" stroke="${headlineColor}" stroke-width="1.5" opacity="0.7"/>`;
+      }
+    } else if (!multiPair) {
+      headlineText = `<text x="${w / 2}" y="44" text-anchor="middle" font-size="12" font-family="${CHART_MONO}" fill="${CHART_COLORS.muted}">Not enough data on one side to compare</text>`;
     }
-  } else {
-    headline = `<text x="${w / 2}" y="44" text-anchor="middle" font-size="12" font-family="${CHART_MONO}" fill="${CHART_COLORS.muted}">Not enough data on one side to compare</text>`;
-  }
+  });
 
   return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
-    <text x="${w / 2}" y="16" text-anchor="middle" font-size="11" font-family="${CHART_MONO}" fill="${CHART_COLORS.green}" letter-spacing="1">AVG $/LIVING M² — ACTIVE VS. CLOSED</text>
-    ${headline}
+    <text x="${w / 2}" y="16" text-anchor="middle" font-size="11" font-family="${CHART_MONO}" fill="${CHART_COLORS.green}" letter-spacing="1">AVG $/LIVING M² — ACTIVE VS. CLOSED${multiPair ? ' (BY TYPE)' : ''}</text>
+    ${headlineText}
     <line x1="${pad.left}" y1="${baseY.toFixed(1)}" x2="${(w - pad.right).toFixed(1)}" y2="${baseY.toFixed(1)}" stroke="${CHART_COLORS.grid}"/>
     ${bracket}
     ${bars}
@@ -5056,7 +5362,7 @@ function computeChartSvgs() {
     status, name: displayName(status),
     color: STATUS_COLORS[status] || CHART_COLORS.grey,
     entries: Object.entries(mergedListings).filter(([m, d]) =>
-      statusGroup(d.status) === status && passesPriceFilter(d) && !isLandListing(d) && isReportIncluded(d) &&
+      statusGroup(d.status) === status && passesPriceFilter(d) && passesResidentialTypeFilter(d) && isReportIncluded(d) &&
       // Closed specifically also respects the Sold Market Report's own time
       // window (isWithinSoldReportWindow — trailing 12 months by default,
       // or all-time if that toggle is set). Without this, "Closed (Sold)"
@@ -5084,13 +5390,13 @@ function computeChartSvgs() {
     }).map(([_, d]) => d)
   ));
   const priceDistSvg = chartStatuses.length ? svgGroupedBarChart({
-    title: 'Price Distribution', groupLabels: bands.map(b => b.label), legendPosition: 'right',
+    title: 'Price Distribution' + residentialTypeScopeSuffix(), groupLabels: bands.map(b => b.label), legendPosition: 'right',
     seriesNames: byStatus.map(g => g.name), seriesColors: byStatus.map(g => g.color),
     seriesValues: priceSeriesListings.map(bandsArr => bandsArr.map(l => l.length)),
     xAxisTitle: 'Price Range (List Price, or Sold Price for Closed)', yAxisTitle: 'Listings',
     seriesItemLists: priceSeriesListings.map(bandsArr => bandsArr.map(l => l.map(listingLabel))),
     seriesMlsLists: priceSeriesListings.map(bandsArr => bandsArr.map(l => l.map(d => d.mls))),
-  }) : svgGroupedBarChart({ title: 'Price Distribution', groupLabels: bands.map(b => b.label), seriesNames: ['—'], seriesColors: [CHART_COLORS.grey], seriesValues: [bands.map(() => 0)], xAxisTitle: 'Price Range', yAxisTitle: 'Listings' });
+  }) : svgGroupedBarChart({ title: 'Price Distribution' + residentialTypeScopeSuffix(), groupLabels: bands.map(b => b.label), seriesNames: ['—'], seriesColors: [CHART_COLORS.grey], seriesValues: [bands.map(() => 0)], xAxisTitle: 'Price Range', yAxisTitle: 'Listings' });
   const priceCsv = { headers: ['Price Band', ...byStatus.map(g => g.name)], rows: bands.map((b, bi) => [b.label, ...priceSeriesListings.map(bandsArr => bandsArr[bi].length)]) };
 
   // Equal 5-year bands — the old ones (Pre-2010, 2010-15, 2016-20, 2021-23, 2024+)
@@ -5107,13 +5413,13 @@ function computeChartSvgs() {
     g.entries.filter(([m, d]) => d.year_built && !activeExcludeYear.has(m) && d.year_built >= b.min && d.year_built < b.max).map(([_, d]) => d)
   ));
   const yearBuiltSvg = chartStatuses.length ? svgGroupedBarChart({
-    title: 'Year Built Distribution', groupLabels: yearBands.map(b => b.label), legendPosition: 'right',
+    title: 'Year Built Distribution' + residentialTypeScopeSuffix(), groupLabels: yearBands.map(b => b.label), legendPosition: 'right',
     seriesNames: byStatus.map(g => g.name), seriesColors: byStatus.map(g => g.color),
     seriesValues: yearSeriesListings.map(bandsArr => bandsArr.map(l => l.length)),
     xAxisTitle: 'Year Built', yAxisTitle: 'Listings',
     seriesItemLists: yearSeriesListings.map(bandsArr => bandsArr.map(l => l.map(listingLabel))),
     seriesMlsLists: yearSeriesListings.map(bandsArr => bandsArr.map(l => l.map(d => d.mls))),
-  }) : svgGroupedBarChart({ title: 'Year Built Distribution', groupLabels: yearBands.map(b => b.label), seriesNames: ['—'], seriesColors: [CHART_COLORS.grey], seriesValues: [yearBands.map(() => 0)], xAxisTitle: 'Year Built', yAxisTitle: 'Listings' });
+  }) : svgGroupedBarChart({ title: 'Year Built Distribution' + residentialTypeScopeSuffix(), groupLabels: yearBands.map(b => b.label), seriesNames: ['—'], seriesColors: [CHART_COLORS.grey], seriesValues: [yearBands.map(() => 0)], xAxisTitle: 'Year Built', yAxisTitle: 'Listings' });
   const yearCsv = { headers: ['Year Built Band', ...byStatus.map(g => g.name)], rows: yearBands.map((b, bi) => [b.label, ...yearSeriesListings.map(bandsArr => bandsArr[bi].length)]) };
 
   // DOM vs $/Living m²: one colored series per status, each with its own dashed
@@ -5156,24 +5462,31 @@ function computeChartSvgs() {
   // checkboxes above happen to have checked — unlike every other chart in
   // this section. Same effectivePrice/badPriceOrArea logic as the scatter —
   // Closed uses Sold Price/m², Active uses List Price/m², never blended.
-  const ppm2StatusGroups = ['Active', 'Closed'].map(status => {
+  // When both SFH and Condo are selected, this splits into two separate
+  // Active-vs-Closed comparisons (one per type) instead of one blended
+  // comparison — SFH and Condo have different $/m² economics, so merging
+  // them here would hide exactly the kind of gap this chart exists to show.
+  const ppm2TypeDims = isBothResidentialTypesSelected() ? ['SFH', 'Condo'] : [null];
+  const buildPpm2Group = (status, typeDim) => {
     const entries = Object.entries(mergedListings).filter(([m, d]) =>
-      statusGroup(d.status) === status && passesPriceFilter(d) && !isLandListing(d) && isReportIncluded(d)
-      // Closed side follows the same Sold Market Report time-scope toggle
-      // (trailing 12 months by default) — comparing today's Active asking
-      // prices against a Closed sale from years ago isn't a fair read.
+      statusGroup(d.status) === status && passesPriceFilter(d) && passesResidentialTypeFilter(d) && isReportIncluded(d)
       && (status !== 'Closed' || isWithinSoldReportWindow(d))
+      && (typeDim === null || residentialSubTypeGroup(d) === typeDim)
     );
     const validEntries = entries.filter(([m, d]) => d.sqm && effectivePrice(status, d) && !badPriceOrArea(status, m));
     const ppm2s = validEntries.map(([_, d]) => effectivePrice(status, d) / d.sqm);
     // Wording makes the time-scope explicit right on the chart, rather than
     // leaving it as a silent assumption — this is exactly what prompted the
     // scope in the first place (it wasn't obvious before).
-    const name = status === 'Closed' ? closedScopeLabel() : displayName(status);
+    const baseName = status === 'Closed' ? closedScopeLabel() : displayName(status);
+    const name = typeDim ? baseName + ' ' + typeDim : baseName;
     return { status, name, color: STATUS_COLORS[status] || CHART_COLORS.grey, avgPpm2: ppm2s.length ? mean(ppm2s) : null, validEntries };
-  });
-  const [activePpm2Group, closedPpm2Group] = ppm2StatusGroups;
-  const ppm2StatusSvg = svgActiveClosedPpm2Chart({ activeGroup: activePpm2Group, closedGroup: closedPpm2Group });
+  };
+  const ppm2Pairs = ppm2TypeDims.map(typeDim => ({
+    label: typeDim, activeGroup: buildPpm2Group('Active', typeDim), closedGroup: buildPpm2Group('Closed', typeDim),
+  }));
+  const ppm2StatusGroups = ppm2Pairs.flatMap(p => [p.activeGroup, p.closedGroup]);
+  const ppm2StatusSvg = svgActiveClosedPpm2Chart({ pairs: ppm2Pairs });
   const ppm2StatusCsv = { headers: ['Status', 'Avg $/Living m²', 'n'], rows: ppm2StatusGroups.map(g => [g.name, g.avgPpm2 != null ? Math.round(g.avgPpm2) : '', g.validEntries.length]) };
 
   // "Same Price" covers a listing with no recorded price move — current Price
@@ -5193,7 +5506,7 @@ function computeChartSvgs() {
   const chgPct = k => Math.round(chgGroups[k].length / chgTotal * 1000) / 10;
   const chgDisplayLabel = k => `${k} (${chgPct(k)}%)`;
   const activitySvg = svgDonutChart({
-    title: `Listing Activity (Active only, n=${activityEntries.length})`, labels: chgLabels.map(chgDisplayLabel), values: chgLabels.map(k => chgGroups[k].length),
+    title: `Listing Activity (Active${residentialTypeScopeSuffix()} only, n=${activityEntries.length})`, labels: chgLabels.map(chgDisplayLabel), values: chgLabels.map(k => chgGroups[k].length),
     colors: chgLabels.map(k => CHG_COLORS[k] || CHART_COLORS.grey),
     itemLists: chgLabels.map(k => chgGroups[k].map(listingLabel)),
     mlsLists: chgLabels.map(k => chgGroups[k].map(d => d.mls)),
@@ -5249,7 +5562,7 @@ function singleSeriesBar(title, seriesLabel, groupLabels, values, monthOrBandLis
 }
 
 function renderTrends() {
-  const showResidential = propertyTypeFilters.has('Residential');
+  const showResidential = isAnyResidentialTypeSelected();
   document.getElementById('trends-block').style.display = showResidential ? 'block' : 'none';
   if (!showResidential) return;
 
@@ -5310,53 +5623,85 @@ function renderTrends() {
 
   // #13 Active listings over time
   renderTimeRangeFilter('chart-active-over-time');
-  const aot = computeActiveOverTime(ACTIVE_METRIC_FLOOR_KEY);
-  const aotRange = timeRangeMask(aot.dates, chartTimeRanges['chart-active-over-time']);
-  let [aotLabels, aotCounts, aotMonthListings] = applyTimeMask(aotRange.mask, aot.labels, aot.counts, aot.monthListings);
-  ({ labels: aotLabels, values: aotCounts, monthListings: aotMonthListings } = injectExactBoundary(
-    aotLabels, aotCounts, aotMonthListings, aotRange.startBoundary, 'start', (listings) => listings.length));
-  ({ labels: aotLabels, values: aotCounts, monthListings: aotMonthListings } = injectExactBoundary(
-    aotLabels, aotCounts, aotMonthListings, aotRange.endBoundary, 'end', (listings) => listings.length));
-  // % change in active-listing count over the trailing 12 months, for the
-  // chart's headline stat — computed off the FULL underlying series (aot),
-  // not the range-masked aotCounts, so the headline always means "the last
-  // 12 months" regardless of whatever display range (90d/360d/Custom/etc.)
-  // the chart itself is currently zoomed to.
-  let aotHeadline = null, aotTrendLine = null;
-  if (aot.dates.length >= 2) {
-    const lastIdx = aot.dates.length - 1;
-    const lastDate = new Date(aot.dates[lastIdx]);
-    const lastVal = aot.counts[lastIdx];
-    const targetDate = new Date(lastDate.getFullYear(), lastDate.getMonth() - 12, lastDate.getDate());
-    let refIdx = 0;
-    for (let i = 0; i < aot.dates.length; i++) { if (new Date(aot.dates[i]) <= targetDate) refIdx = i; }
-    const refVal = aot.counts[refIdx];
-    if (refVal != null && lastVal != null && refVal > 0 && refIdx !== lastIdx) {
-      const pctChange = (lastVal - refVal) / refVal * 100;
-      const sign = pctChange > 0 ? '+' : (pctChange < 0 ? '−' : '');
-      // More active inventory building up reads as a caution (red), same
-      // convention as Months of Supply and the $/m² overpricing chart
-      // elsewhere in this report; fewer active listings (tightening) reads
-      // as green.
-      const color = pctChange > 0 ? CHART_COLORS.red : pctChange < 0 ? CHART_COLORS.green : CHART_COLORS.muted;
-      aotHeadline = { text: `${sign}${Math.abs(Math.round(pctChange))}% ACTIVE LISTINGS`, subtext: `${refVal} → ${lastVal} over the trailing 12 months`, color };
-      // A straight line drawn directly from the 12-months-ago point to
-      // today's point, laid over the real (noisier) line — same color as
-      // the headline, so the line and the headline text always agree
-      // about direction instead of a fixed color competing with it.
-      aotTrendLine = { fromLabel: aot.dates[refIdx], toLabel: aot.dates[lastIdx], fromValue: refVal, toValue: lastVal, color };
+  const bothTypesForAot = isBothResidentialTypesSelected();
+  // When both SFH and Condo are selected, this becomes two SEPARATE charts
+  // (one per type) rather than one chart with two overlaid lines — each one
+  // is a full, independent "Active Listings Over Time" with its own
+  // headline and its own 12-months-ago trend line, exactly like the single-
+  // type view already had. A shared combined chart had to drop the trend
+  // line entirely (nothing sensible to draw two competing trend lines onto
+  // one shared axis), which was worse than just giving each type its own
+  // complete chart.
+  function buildFullAotChart(typeFilter, typeLabel) {
+    const full = computeActiveOverTime(ACTIVE_METRIC_FLOOR_KEY, typeFilter);
+    const range = timeRangeMask(full.dates, chartTimeRanges['chart-active-over-time']);
+    let [labels, counts, monthListings] = applyTimeMask(range.mask, full.labels, full.counts, full.monthListings);
+    const countFn = typeFilter
+      ? (listings) => listings.filter(d => residentialSubTypeGroup(d) === typeFilter).length
+      : (listings) => listings.length;
+    ({ labels, values: counts, monthListings } = injectExactBoundary(labels, counts, monthListings, range.startBoundary, 'start', countFn));
+    ({ labels, values: counts, monthListings } = injectExactBoundary(labels, counts, monthListings, range.endBoundary, 'end', countFn));
+
+    // % change over the trailing 12 months, computed off the FULL underlying
+    // series (full), not the range-masked labels/counts, so this always
+    // means "the last 12 months" regardless of whatever display range
+    // (90d/360d/Custom/etc.) the chart itself is currently zoomed to.
+    let headline = null, trendLine = null;
+    if (full.dates.length >= 2) {
+      const lastIdx = full.dates.length - 1;
+      const lastDate = new Date(full.dates[lastIdx]);
+      const lastVal = full.counts[lastIdx];
+      const targetDate = new Date(lastDate.getFullYear(), lastDate.getMonth() - 12, lastDate.getDate());
+      let refIdx = 0;
+      for (let i = 0; i < full.dates.length; i++) { if (new Date(full.dates[i]) <= targetDate) refIdx = i; }
+      const refVal = full.counts[refIdx];
+      if (refVal != null && lastVal != null && refVal > 0 && refIdx !== lastIdx) {
+        const pctChange = (lastVal - refVal) / refVal * 100;
+        const sign = pctChange > 0 ? '+' : (pctChange < 0 ? '−' : '');
+        // More active inventory building up reads as a caution (red), same
+        // convention as Months of Supply and the $/m² overpricing chart
+        // elsewhere in this report; fewer active listings (tightening)
+        // reads as green.
+        const color = pctChange > 0 ? CHART_COLORS.red : pctChange < 0 ? CHART_COLORS.green : CHART_COLORS.muted;
+        headline = { text: `${sign}${Math.abs(Math.round(pctChange))}% ACTIVE LISTINGS`, subtext: `${refVal} → ${lastVal} over the trailing 12 months`, color };
+        // A straight line drawn directly from the 12-months-ago point to
+        // today's point, laid over the real (noisier) line — same color as
+        // the headline, so the line and the headline text always agree
+        // about direction instead of a fixed color competing with it.
+        trendLine = { fromLabel: full.dates[refIdx], toLabel: full.dates[lastIdx], fromValue: refVal, toValue: lastVal, color };
+      }
     }
+
+    const svg = labels.length
+      ? svgLineChart({
+          title: 'Active Listings Over Time' + (typeLabel ? ' (' + typeLabel + ')' : ''), labels, showLegend: false, zeroBaseline: false,
+          series: [{ name: typeLabel || 'Active', color: typeLabel === 'Condo' ? '#4a9edb' : CHART_COLORS.green,
+                     values: counts, itemLists: monthListings.map(l => l.map(listingLabel)), mlsLists: monthListings.map(l => l.map(d => d.mls)) }],
+          xAxisTitle: 'Date (snapshot: last day of month, plus exact custom-range boundaries; starts Dec 2024)', yAxisTitle: '# active that day',
+          headline, trendLine, valueFmt: v => Math.round(v),
+        })
+      : '<p class="chart-hint">No usable List Dates in this range.</p>';
+    return { svg, labels, counts };
   }
-  setChartSvg('chart-active-over-time', aotLabels.length
-    ? svgLineChart({
-        title: 'Active Listings Over Time', labels: aotLabels, showLegend: false, zeroBaseline: false,
-        series: [{ name: 'Active', color: CHART_COLORS.green, values: aotCounts, itemLists: aotMonthListings.map(l => l.map(listingLabel)), mlsLists: aotMonthListings.map(l => l.map(d => d.mls)) }],
-        xAxisTitle: 'Date (snapshot: last day of month, plus exact custom-range boundaries; starts Dec 2024)', yAxisTitle: '# active that day',
-        headline: aotHeadline, trendLine: aotTrendLine, valueFmt: v => Math.round(v),
-      })
-    : '<p class="chart-hint">No usable List Dates in this range.</p>',
-    "Reconstructed from every listing's List Date + end date (Sold/Withdrawn/Expired/Canceled, or still-open for Active) — a real point-in-time snapshot, not current-status counts projected backward. Starts December 2024, since OMNI adoption before that was too thin to reconstruct reliably (a long, mostly-empty stretch of history would otherwise dominate the axis). When you set a custom or 90/180/360-day range, the start/end points are freshly calculated at that exact date, not rounded to the nearest month-end. The y-axis doesn't start at 0 — it's scaled to this series' own range so real ups and downs are visible, not flattened out. The headline % and dashed red line always compare today to 12 months ago specifically, regardless of whatever display range you've selected above.",
-    { headers: ['Date', 'Active Count'], rows: aotLabels.map((lb, i) => [lb, aotCounts[i]]) });
+
+  const aotBaseTooltip = "Reconstructed from every listing's List Date + end date (Sold/Withdrawn/Expired/Canceled, or still-open for Active) — a real point-in-time snapshot, not current-status counts projected backward. Starts December 2024, since OMNI adoption before that was too thin to reconstruct reliably (a long, mostly-empty stretch of history would otherwise dominate the axis). When you set a custom or 90/180/360-day range, the start/end points are freshly calculated at that exact date, not rounded to the nearest month-end. The y-axis doesn't start at 0 — it's scaled to this series' own range so real ups and downs are visible, not flattened out. The headline % and dashed line always compare today to 12 months ago specifically, regardless of whatever display range you've selected above.";
+  const condoWrap = document.getElementById('chart-active-over-time-condo-wrap');
+  if (bothTypesForAot) {
+    const sfhChart = buildFullAotChart('SFH', 'SFH');
+    const condoChart = buildFullAotChart('Condo', 'Condo');
+    setChartSvg('chart-active-over-time', sfhChart.svg,
+      aotBaseTooltip + ' Shown as its own chart (rather than combined with Condo) since both are currently selected — SFH and Condo inventory can move in different directions even when a combined total would look flat.',
+      { headers: ['Date', 'SFH Count'], rows: sfhChart.labels.map((lb, i) => [lb, sfhChart.counts[i]]) });
+    condoWrap.style.display = '';
+    setChartSvg('chart-active-over-time-condo', condoChart.svg,
+      aotBaseTooltip + ' Shown as its own chart (rather than combined with SFH) since both are currently selected.',
+      { headers: ['Date', 'Condo Count'], rows: condoChart.labels.map((lb, i) => [lb, condoChart.counts[i]]) });
+  } else {
+    condoWrap.style.display = 'none';
+    const chart = buildFullAotChart(null, null);
+    setChartSvg('chart-active-over-time', chart.svg, aotBaseTooltip,
+      { headers: ['Date', 'Active Count'], rows: chart.labels.map((lb, i) => [lb, chart.counts[i]]) });
+  }
 
   // These three floor at December 2024 too — same reasoning as immediately
   // above. Each also gets its own independent custom/90/180/360-day range
@@ -5519,7 +5864,7 @@ function renderTrends() {
   // #3 DOM histogram, per status
   const domHist = computeDomHistogram();
   setChartSvg('chart-dom-histogram', domHist.byStatus.length ? svgGroupedBarChart({
-    title: 'DOM Histogram', groupLabels: DOM_BANDS.map(b => b.label), legendPosition: 'right', rotateLabels: true,
+    title: 'DOM Histogram' + residentialTypeScopeSuffix(), groupLabels: DOM_BANDS.map(b => b.label), legendPosition: 'right', rotateLabels: true,
     seriesNames: domHist.byStatus.map(g => g.name), seriesColors: domHist.byStatus.map(g => g.color),
     seriesValues: domHist.bandListings.map(bandsArr => bandsArr.map(l => l.length)),
     xAxisTitle: 'Days on Market', yAxisTitle: 'Listings',
@@ -5968,7 +6313,7 @@ function renderPropertyTypeFilterPills() {
   const container = document.getElementById('property-type-filter-pills');
   container.innerHTML = PROPERTY_TYPE_PRESETS.map(pt => {
     const active = propertyTypeFilters.has(pt);
-    const n = Object.values(mergedListings).filter(d => pt === 'Land' ? isLandListing(d) : !isLandListing(d)).length;
+    const n = Object.values(mergedListings).filter(d => pt === 'Land' ? isLandListing(d) : (!isLandListing(d) && residentialSubTypeGroup(d) === pt)).length;
     return `<button class="filter-pill ${active ? 'active' : ''}" data-pt="${pt}">${active ? '✓ ' : ''}${pt} (${n})</button>`;
   }).join('')
     + `<button class="ghost filter-mini-btn" id="pt-select-all">Select all</button>`
@@ -5977,7 +6322,7 @@ function renderPropertyTypeFilterPills() {
     btn.addEventListener('click', () => togglePropertyTypeFilter(btn.dataset.pt));
   });
   document.getElementById('pt-select-all').addEventListener('click', () => setPropertyTypeFilter(new Set(PROPERTY_TYPE_PRESETS)));
-  document.getElementById('pt-reset').addEventListener('click', () => setPropertyTypeFilter(new Set(['Residential'])));
+  document.getElementById('pt-reset').addEventListener('click', () => setPropertyTypeFilter(new Set(['SFH', 'Condo'])));
 }
 
 // ---------- Status filter ----------
@@ -8234,7 +8579,7 @@ async function loadCustomAreaReport(feature) {
     // applyAgentBrokerGating).
     const myOfficeInput = document.getElementById('my-office-input');
     if (myOfficeInput && !myOfficeInput.value.trim()) myOfficeInput.value = '2 Costa Rica Real Estate';
-    propertyTypeFilters = new Set(['Residential']); // Agent View is residential-only — Land has no report/filter here anymore
+    propertyTypeFilters = new Set(['SFH', 'Condo']); // Agent View default — same as before, just SFH+Condo combined instead of one blended 'Residential' bucket. Land is now also selectable (see the un-hidden Property Type filter row).
     tableSortIdx = null; tableSortDir = 1;
     resetChartTimeRanges();
     clearSummaryStale();
@@ -8313,7 +8658,7 @@ async function loadAgentReport(area) {
     // applyAgentBrokerGating).
     const myOfficeInput = document.getElementById('my-office-input');
     if (myOfficeInput && !myOfficeInput.value.trim()) myOfficeInput.value = '2 Costa Rica Real Estate';
-    propertyTypeFilters = new Set(['Residential']); // Agent View is residential-only — Land has no report/filter here anymore
+    propertyTypeFilters = new Set(['SFH', 'Condo']); // Agent View default — same as before, just SFH+Condo combined instead of one blended 'Residential' bucket. Land is now also selectable (see the un-hidden Property Type filter row).
     tableSortIdx = null; tableSortDir = 1;
     resetChartTimeRanges();
     clearSummaryStale();
