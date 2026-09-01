@@ -950,8 +950,8 @@
 
   <div class="admin-gate-overlay" id="admin-gate-overlay" style="display:none">
     <div class="admin-gate-card">
-      <h3>Admin View</h3>
-      <p>This section can upload data and change what agents see — enter the admin password to continue.</p>
+      <h3 id="admin-gate-title">Admin View</h3>
+      <p id="admin-gate-desc">This section can upload data and change what agents see — enter the admin password to continue.</p>
       <input type="password" id="admin-gate-input" placeholder="Password" autocomplete="off">
       <p class="admin-gate-error" id="admin-gate-error"></p>
       <div class="admin-gate-buttons">
@@ -7395,6 +7395,16 @@ document.getElementById('btn-download-report').addEventListener('click', async (
   const btn = document.getElementById('btn-download-report');
   const orig = btn.textContent;
   btn.disabled = true;
+  // Ensures the AI Market Analysis section is always attempted before the
+  // report is built, not just when the report happens to have been opened
+  // through Agent View's auto-generate flow — Admin View's Analyze flow
+  // never auto-generates one, so without this, downloading straight from
+  // Admin without first manually clicking "Generate AI analysis" would
+  // correctly-but-confusingly produce a report missing that section.
+  if (!currentAiAnalysis || aiAnalysisStale) {
+    btn.textContent = 'Generating AI analysis…';
+    await generateAiAnalysis();
+  }
   btn.textContent = 'Generating report (extracting photos)…';
   try {
     const reportHtml = await buildReportHtml();
@@ -7421,6 +7431,13 @@ document.getElementById('btn-print-report').addEventListener('click', async () =
   const btn = document.getElementById('btn-print-report');
   const orig = btn.textContent;
   btn.disabled = true;
+  // Same guarantee as Download Report above — the AI section shouldn't
+  // silently be missing just because this print was triggered from a flow
+  // that doesn't auto-generate one (Admin View's Analyze, in particular).
+  if (!currentAiAnalysis || aiAnalysisStale) {
+    btn.textContent = 'Generating AI analysis…';
+    await generateAiAnalysis();
+  }
   btn.textContent = 'Generating (extracting photos)…';
   try {
     const useLightTheme = document.getElementById('print-light-theme-checkbox').checked;
@@ -7740,7 +7757,7 @@ wireSplitHalfMotion('card-agent', 'wipe-agent', 'card-admin');
 wireSplitHalfMotion('card-admin', 'wipe-admin', 'card-agent');
 
 let agentEntryLoading = false;
-document.getElementById('card-agent').addEventListener('click', async () => {
+async function beginAgentEntry() {
   // Guards against a second click while the first is still loading — the
   // wipe/exit animation only starts once loadAgentLocations resolves below,
   // so without this a fast double-click could fire two overlapping loads.
@@ -7779,29 +7796,50 @@ document.getElementById('card-agent').addEventListener('click', async () => {
     resetProgressBar('agent-entry-progress');
   }
   chooseLandingHalf(card, () => showScreen('agent-picker'));
-});
-// ---------- Admin View password gate ----------
+}
+// ---------- Password gates (Admin View + Agent View) ----------
 // Deliberately NOT real security — this check runs in the same JS file
-// anyone can view the source of, so the password itself is discoverable by
-// anyone who looks. This only stops someone from casually clicking into
-// Admin View (uploading data, changing what agents see) if they find the
-// tool's link — it does not stop a determined person, and it does nothing
-// to protect the Apps Script backend itself (that's a separate, deliberate
-// decision already made — see the registry sync endpoint). Change this
-// string before sharing the tool's link outside the team.
+// anyone can view the source of, so either password is discoverable by
+// anyone who looks. This only stops someone from casually clicking into a
+// view if they find the tool's link — it does not stop a determined
+// person, and it does nothing to protect the Apps Script backend itself
+// (that's a separate, deliberate decision already made — see the registry
+// sync endpoint). Change these strings before sharing the tool's link
+// outside the team.
 const ADMIN_PASSWORD = 'omni';
 const ADMIN_UNLOCK_KEY = 'admin_unlocked_v1';
+const AGENT_PASSWORD = '2crre!';
+const AGENT_UNLOCK_KEY = 'agent_unlocked_v1';
 const AI_REFRESH_LAST_RUN_KEY = 'ai_refresh_last_run_date';
 
 function isAdminUnlocked() { return localStorage.getItem(ADMIN_UNLOCK_KEY) === 'true'; }
+function isAgentUnlocked() { return localStorage.getItem(AGENT_UNLOCK_KEY) === 'true'; }
 
 function enterAdminView() {
   chooseLandingHalf(document.getElementById('card-admin'), () => showScreen('admin'));
   maybeAutoRefreshAiAnalyses();
 }
 
-document.getElementById('card-admin').addEventListener('click', () => {
-  if (isAdminUnlocked()) { enterAdminView(); return; }
+// Which view the currently-open gate modal is unlocking — set right before
+// the modal is shown, read when the form is submitted. One shared modal
+// serves both views rather than two near-identical copies of the same
+// overlay markup.
+let pendingGateView = null;
+const GATE_CONFIG = {
+  admin: {
+    title: 'Admin View', password: ADMIN_PASSWORD, unlockKey: ADMIN_UNLOCK_KEY, enter: enterAdminView,
+    desc: 'This section can upload data and change what agents see — enter the admin password to continue.',
+  },
+  agent: {
+    title: 'Agent View', password: AGENT_PASSWORD, unlockKey: AGENT_UNLOCK_KEY, enter: beginAgentEntry,
+    desc: 'Enter the agent password to view market reports.',
+  },
+};
+function showGate(view) {
+  pendingGateView = view;
+  const cfg = GATE_CONFIG[view];
+  document.getElementById('admin-gate-title').textContent = cfg.title;
+  document.getElementById('admin-gate-desc').textContent = cfg.desc;
   const overlay = document.getElementById('admin-gate-overlay');
   const input = document.getElementById('admin-gate-input');
   const errorEl = document.getElementById('admin-gate-error');
@@ -7809,17 +7847,23 @@ document.getElementById('card-admin').addEventListener('click', () => {
   input.value = '';
   overlay.style.display = 'flex';
   input.focus();
+}
+document.getElementById('card-admin').addEventListener('click', () => {
+  if (isAdminUnlocked()) { enterAdminView(); return; }
+  showGate('admin');
 });
 document.getElementById('admin-gate-cancel').addEventListener('click', () => {
   document.getElementById('admin-gate-overlay').style.display = 'none';
 });
 function submitAdminGate() {
+  const cfg = GATE_CONFIG[pendingGateView];
+  if (!cfg) return;
   const input = document.getElementById('admin-gate-input');
   const errorEl = document.getElementById('admin-gate-error');
-  if (input.value === ADMIN_PASSWORD) {
-    localStorage.setItem(ADMIN_UNLOCK_KEY, 'true');
+  if (input.value === cfg.password) {
+    localStorage.setItem(cfg.unlockKey, 'true');
     document.getElementById('admin-gate-overlay').style.display = 'none';
-    enterAdminView();
+    cfg.enter();
   } else {
     errorEl.textContent = 'Incorrect password.';
     input.value = '';
@@ -7828,6 +7872,11 @@ function submitAdminGate() {
 }
 document.getElementById('admin-gate-submit').addEventListener('click', submitAdminGate);
 document.getElementById('admin-gate-input').addEventListener('keydown', e => { if (e.key === 'Enter') submitAdminGate(); });
+
+document.getElementById('card-agent').addEventListener('click', () => {
+  if (isAgentUnlocked()) { beginAgentEntry(); return; }
+  showGate('agent');
+});
 
 // Tier-1 automatic refresh: fires once per calendar day, the first time
 // Admin View is opened that day — not a true background job (nothing runs
