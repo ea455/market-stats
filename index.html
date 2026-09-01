@@ -1069,6 +1069,7 @@
       <span class="filter-label">Status:</span>
       <div class="filter-pills" id="status-filter-pills"></div>
     </div>
+    <p class="chart-hint" style="margin:-4px 0 8px;">The counts next to Status above are raw — every listing with that status, nothing left out. Reports below can show a smaller number for the same status: they additionally exclude listings flagged for bad List/Sold Price data or marked "don't include in reports".<span class="hide-in-agent-view"> See Admin's Data Quality Review for exactly which listings and why.</span></p>
     <div class="filter-row">
       <span class="filter-label">Price filter:</span>
       <div class="filter-pills" id="price-filter-pills"></div>
@@ -7915,7 +7916,10 @@ function setSoldReportScope(allTime) {
   });
 });
 document.getElementById('btn-back-from-admin').addEventListener('click', () => showScreen('landing'));
-document.getElementById('btn-back-from-agent-report').addEventListener('click', () => showScreen('agent-picker'));
+document.getElementById('btn-back-from-agent-report').addEventListener('click', () => {
+  resetLocationGrid(); // undoes the "is-busy" / spinner state selectLocationCard set before loading — never cleared on a successful load, only on a failed one, which left the grid stuck looking mid-load after a successful visit
+  showScreen('agent-picker');
+});
 
 // Manually-traced area boundaries (via geojson.io), embedded directly since
 // these are set-once, rarely-changed reference data — not worth routing
