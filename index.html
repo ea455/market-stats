@@ -2271,6 +2271,7 @@ function residentialTypeSplitStats(entries, priceOf, badPriceOrArea, activeExclu
     const typeYears = activeExcludeYear ? typeEntries.filter(([m, d]) => d.year_built && !activeExcludeYear.has(m)).map(([_, d]) => d.year_built) : [];
     const typeBeds = typeAll.map(d => d.beds).filter(Boolean);
     const typeBaths = typeAll.map(d => d.baths).filter(v => v != null && v > 0);
+    const typeDoms = typeAll.map(d => d.dom).filter(d => d !== undefined && d !== null);
 
     out[type] = {
       n: typeEntries.length,
@@ -2281,6 +2282,7 @@ function residentialTypeSplitStats(entries, priceOf, badPriceOrArea, activeExclu
       avgYear: typeYears.length ? mean(typeYears) : null, yearN: typeYears.length,
       avgBeds: typeBeds.length ? mean(typeBeds) : null,
       avgBaths: typeBaths.length ? mean(typeBaths) : null,
+      avgDom: typeDoms.length ? mean(typeDoms) : null, medDom: typeDoms.length ? median(typeDoms) : null, domN: typeDoms.length,
     };
   });
   return out;
@@ -2521,10 +2523,19 @@ function computeSoldStats() {
     typeEntries.forEach(d => { if (d.soldPrice != null && d.sqm) { tP += d.soldPrice; tS += d.sqm; } });
     const typeSqms = typeEntries.map(d => d.sqm).filter(v => v);
     const typeLots = typeEntries.map(d => d.lot).filter(v => v);
+    // Same "prefer computed List→Sold date, fall back to the source's own DOM
+    // field" logic as the blended domEntries below — kept consistent so the
+    // split figures are derived the same way as the number they're splitting.
+    const typeDomAll = all.filter(d => residentialSubTypeGroup(d) === type);
+    const typeDoms = typeDomAll.map(d => {
+      const computed = (d.listDate && d.soldDate) ? daysBetween(d.listDate, d.soldDate) : null;
+      return computed != null ? computed : (d.dom != null ? d.dom : null);
+    }).filter(v => v != null && v >= 0);
     typeSplit[type] = {
       ppm2: tS ? tP / tS : null,
       avgSqm: typeSqms.length ? mean(typeSqms) : null, sqmN: typeSqms.length,
       avgLot: typeLots.length ? mean(typeLots) : null, lotN: typeLots.length,
+      avgDom: typeDoms.length ? mean(typeDoms) : null, medDom: typeDoms.length ? median(typeDoms) : null, domN: typeDoms.length,
       n: typeEntries.length,
     };
   });
@@ -2778,6 +2789,9 @@ function buildStatusPanelHtml({ status, stats: s }) {
   const countVal = bothTypes ? splitStatValueHtml(s.typeSplit, t => t.n.toLocaleString()) : s.count;
   const avgPriceVal = bothTypes ? splitStatValueHtml(s.typeSplit, t => fmtMoney(t.avgPrice)) : fmtMoney(s.avgPrice);
   const medPriceVal = bothTypes ? splitStatValueHtml(s.typeSplit, t => fmtMoney(t.medPrice)) : fmtMoney(s.medPrice);
+  const avgSqmVal = bothTypes ? splitStatValueHtml(s.typeSplit, t => t.avgSqm ? Math.round(t.avgSqm).toLocaleString() : '—') : (s.avgSqm ? Math.round(s.avgSqm).toLocaleString() : '—');
+  const avgDomVal = bothTypes ? splitStatValueHtml(s.typeSplit, t => t.avgDom ? t.avgDom.toFixed(1) : '—') : (s.avgDom ? s.avgDom.toFixed(1) : '—');
+  const medDomVal = bothTypes ? splitStatValueHtml(s.typeSplit, t => t.medDom != null ? t.medDom : '—') : (s.medDom != null ? s.medDom : '—');
   const avgYearVal = bothTypes ? splitStatValueHtml(s.typeSplit, t => t.avgYear ? Math.round(t.avgYear) : '—') : (s.avgYear ? Math.round(s.avgYear) : '—');
   const avgBedsVal = bothTypes ? splitStatValueHtml(s.typeSplit, t => t.avgBeds ? t.avgBeds.toFixed(1) : '—') : (s.avgBeds ? s.avgBeds.toFixed(1) : '—');
   const avgBathsVal = bothTypes ? splitStatValueHtml(s.typeSplit, t => t.avgBaths ? t.avgBaths.toFixed(1) : '—') : (s.avgBaths ? s.avgBaths.toFixed(1) : '—');
@@ -2785,15 +2799,16 @@ function buildStatusPanelHtml({ status, stats: s }) {
     [status + ' ' + scopeLabel + ' Listings', countVal, ''],
     ['Avg Price', avgPriceVal, '', priceTooltip + (bothTypes ? ' Shown separately for SFH and Condo — these are different-enough products that one blended average would describe neither well.' : '')],
     ['Median Price', medPriceVal, '', 'Half of listings priced above this, half below — less skewed by one or two ultra-luxury outliers than the average.' + (bothTypes ? ' Shown separately for SFH and Condo.' : '')],
-    ['Avg Living m²', s.avgSqm ? Math.round(s.avgSqm).toLocaleString() : '—', `n=${s.sqmN}`],
+    ['Avg Living m²' + (bothTypes ? '' : (scopeLabel ? ' (' + scopeLabel + ')' : '')), avgSqmVal, bothTypes ? `n=${s.typeSplit.SFH.sqmN} SFH, ${s.typeSplit.Condo.sqmN} Condo` : `n=${s.sqmN}`,
+      bothTypes ? 'Shown separately for SFH and Condo — these two skew toward genuinely different sizes, so one blended average undersells that difference.' : null],
     ['Avg Lot m²' + (bothTypes ? ' (SFH)' : (scopeLabel ? ' (' + scopeLabel + ')' : '')), lotVal, bothTypes ? `n=${s.typeSplit.SFH.lotN}` : `n=${s.lotN}`,
       bothTypes ? 'Condo dropped from this one specifically — Condos structurally don\'t carry meaningful lot data, so this shows only the SFH figure rather than pairing it with a mostly-empty Condo number.' : null],
     ['Price / m²' + (bothTypes ? '' : (scopeLabel ? ' (' + scopeLabel + ')' : '')), ppm2Val, '',
       (bothTypes
         ? 'Avg Price ÷ Avg Living m², shown separately for SFH and Condo — these two have genuinely different price-per-size economics (a house\'s price bakes in land value in a way this figure doesn\'t capture the same way a condo\'s does), so a single blended number would describe neither accurately.'
         : `Avg Price ÷ Avg Living m² — the standard way to compare properties of different sizes on a level footing.`)],
-    ['Avg DOM', s.avgDom ? s.avgDom.toFixed(1) : '—', 'median below', domTooltip],
-    ['Median DOM', s.medDom != null ? s.medDom : '—', '', domTooltip],
+    ['Avg DOM' + (bothTypes ? '' : (scopeLabel ? ' (' + scopeLabel + ')' : '')), avgDomVal, bothTypes ? 'median below' : 'median below', domTooltip + (bothTypes ? ' Shown separately for SFH and Condo — one tends to move faster than the other, which a blended average would hide.' : '')],
+    ['Median DOM' + (bothTypes ? '' : (scopeLabel ? ' (' + scopeLabel + ')' : '')), medDomVal, '', domTooltip],
     ['Avg Year Built', avgYearVal, bothTypes ? `n=${s.typeSplit.SFH.yearN} SFH, ${s.typeSplit.Condo.yearN} Condo` : `n=${s.yearN}`],
     ['Avg Beds', avgBedsVal, ''],
     ['Avg Baths', avgBathsVal, ''],
@@ -2887,6 +2902,12 @@ function renderSoldReport() {
   const soldSqmVal = bothTypes
     ? splitStatValueHtml(s.typeSplit, t => t.avgSqm ? Math.round(t.avgSqm).toLocaleString() : '—')
     : (s.avgSqm ? Math.round(s.avgSqm).toLocaleString() : '—');
+  const soldAvgDomVal = bothTypes
+    ? splitStatValueHtml(s.typeSplit, t => t.avgDom ? t.avgDom.toFixed(0) : '—')
+    : (s.avgDom != null ? s.avgDom.toFixed(0) : '—');
+  const soldMedDomVal = bothTypes
+    ? splitStatValueHtml(s.typeSplit, t => t.medDom != null ? t.medDom : '—')
+    : (s.medDom != null ? s.medDom : '—');
   const tickets = [
     ['Closed ' + scopeLabel + ' Sales', s.count, ''],
     ['Total Sold Volume', fmtMoney(s.totalVolume), '', `Sum of every Sold Price in this group — total dollars that actually changed hands, not asking prices.` + (bothTypes ? ' Combines SFH and Condo into one total.' : '')],
@@ -2902,8 +2923,9 @@ function renderSoldReport() {
       (bothTypes
         ? 'Sold Price ÷ Living m², shown separately for SFH and Condo — these two have genuinely different price-per-size economics, so a single blended number would describe neither accurately.'
         : `Sold Price ÷ Living m² — lets you compare properties of different sizes on equal footing, using the actual sale price rather than the ask.`)],
-    ['Avg DOM', s.avgDom != null ? s.avgDom.toFixed(0) : '—', `n=${s.domN}`, soldDomTooltip],
-    ['Median DOM', s.medDom != null ? s.medDom : '—', '', soldDomTooltip],
+    ['Avg DOM' + (bothTypes ? '' : (scopeLabel ? ' (' + scopeLabel + ')' : '')), soldAvgDomVal, bothTypes ? `n=${s.typeSplit.SFH.domN} SFH, ${s.typeSplit.Condo.domN} Condo` : `n=${s.domN}`,
+      soldDomTooltip + (bothTypes ? ' Shown separately for SFH and Condo.' : '')],
+    ['Median DOM' + (bothTypes ? '' : (scopeLabel ? ' (' + scopeLabel + ')' : '')), soldMedDomVal, '', soldDomTooltip],
     ['Avg Year Built', s.avgYear ? Math.round(s.avgYear) : '—', `n=${s.yearN}`],
     ['Avg Beds', s.avgBeds ? s.avgBeds.toFixed(1) : '—', ''],
     ['Avg Baths', s.avgBaths ? s.avgBaths.toFixed(1) : '—', ''],
@@ -3815,9 +3837,34 @@ function buildAiAnalysisDigest() {
     .filter(({ stats }) => stats.count > 0)
     .map(({ status, stats }) => {
       const stillOpen = STILL_OPEN_STATUSES.has(status);
-      const domFields = stillOpen
-        ? { avgDaysOnMarketSoFar_NOTfinal: r(stats.avgDom), medDaysOnMarketSoFar_NOTfinal: r(stats.medDom) }
-        : { avgDom: r(stats.avgDom), medDom: r(stats.medDom) };
+      // DOM fields carry BOTH the SFH/Condo split suffix AND the SoFar/
+      // NOTfinal suffix together when both apply — the model's existing
+      // rules for each pattern are independent checks ("ends with
+      // _bySFHvsCondo_neverBlend" / "contains SoFar or NOTfinal"), so a name
+      // combining both correctly triggers both interpretations at once.
+      const domFields = bothTypesSelected
+        ? (stillOpen ? {
+            avgDaysOnMarketSoFar_NOTfinal_bySFHvsCondo_neverBlend: {
+              SFH: stats.typeSplit.SFH.domN > 0 ? r(stats.typeSplit.SFH.avgDom) : null,
+              Condo: stats.typeSplit.Condo.domN > 0 ? r(stats.typeSplit.Condo.avgDom) : null,
+            },
+            medDaysOnMarketSoFar_NOTfinal_bySFHvsCondo_neverBlend: {
+              SFH: stats.typeSplit.SFH.domN > 0 ? r(stats.typeSplit.SFH.medDom) : null,
+              Condo: stats.typeSplit.Condo.domN > 0 ? r(stats.typeSplit.Condo.medDom) : null,
+            },
+          } : {
+            avgDom_bySFHvsCondo_neverBlend: {
+              SFH: stats.typeSplit.SFH.domN > 0 ? r(stats.typeSplit.SFH.avgDom) : null,
+              Condo: stats.typeSplit.Condo.domN > 0 ? r(stats.typeSplit.Condo.avgDom) : null,
+            },
+            medDom_bySFHvsCondo_neverBlend: {
+              SFH: stats.typeSplit.SFH.domN > 0 ? r(stats.typeSplit.SFH.medDom) : null,
+              Condo: stats.typeSplit.Condo.domN > 0 ? r(stats.typeSplit.Condo.medDom) : null,
+            },
+          })
+        : (stillOpen
+            ? { avgDaysOnMarketSoFar_NOTfinal: r(stats.avgDom), medDaysOnMarketSoFar_NOTfinal: r(stats.medDom) }
+            : { avgDom: r(stats.avgDom), medDom: r(stats.medDom) });
       // Every size/count/price/demographic stat here splits by SFH vs Condo
       // when both are selected — these are different-enough products (see
       // the tool's own UI, which shows the identical split for the same
@@ -3838,6 +3885,10 @@ function buildAiAnalysisDigest() {
           SFH: stats.typeSplit.SFH.n > 0 ? r(stats.typeSplit.SFH.medPrice) : null,
           Condo: stats.typeSplit.Condo.n > 0 ? r(stats.typeSplit.Condo.medPrice) : null,
         },
+        avgSqm_bySFHvsCondo_neverBlend: {
+          SFH: stats.typeSplit.SFH.sqmN > 0 ? r(stats.typeSplit.SFH.avgSqm) : null,
+          Condo: stats.typeSplit.Condo.sqmN > 0 ? r(stats.typeSplit.Condo.avgSqm) : null,
+        },
         pricePerM2_bySFHvsCondo_neverBlend: {
           SFH: stats.typeSplit.SFH.n > 0 ? r(stats.typeSplit.SFH.ppm2) : null,
           Condo: stats.typeSplit.Condo.n > 0 ? r(stats.typeSplit.Condo.ppm2) : null,
@@ -3857,7 +3908,7 @@ function buildAiAnalysisDigest() {
         },
       } : {
         count: stats.count, avgPrice: r(stats.avgPrice), medPrice: r(stats.medPrice),
-        pricePerM2: r(stats.ppm2), avgLotM2: r(stats.avgLot),
+        avgSqm: r(stats.avgSqm), pricePerM2: r(stats.ppm2), avgLotM2: r(stats.avgLot),
         avgBeds: r(stats.avgBeds, 1), avgBaths: r(stats.avgBaths, 1),
       };
       return {
@@ -3879,15 +3930,24 @@ function buildAiAnalysisDigest() {
     // SFH-only, not a two-type split — same reasoning as residentialByStatus's
     // avgLotM2_SFHonly above.
     avgLotM2_SFHonly: soldRaw.typeSplit.SFH.avgLot != null ? r(soldRaw.typeSplit.SFH.avgLot) : null,
+    avgDom_bySFHvsCondo_neverBlend: {
+      SFH: soldRaw.typeSplit.SFH.domN > 0 ? r(soldRaw.typeSplit.SFH.avgDom) : null,
+      Condo: soldRaw.typeSplit.Condo.domN > 0 ? r(soldRaw.typeSplit.Condo.avgDom) : null,
+    },
+    medDom_bySFHvsCondo_neverBlend: {
+      SFH: soldRaw.typeSplit.SFH.domN > 0 ? r(soldRaw.typeSplit.SFH.medDom) : null,
+      Condo: soldRaw.typeSplit.Condo.domN > 0 ? r(soldRaw.typeSplit.Condo.medDom) : null,
+    },
   } : {
     avgSqm: r(soldRaw.avgSqm),
     avgSoldPricePerM2: r(soldRaw.avgSoldPpm2),
     avgLotM2: r(soldRaw.avgLot),
+    avgDom: r(soldRaw.avgDom), medDom: r(soldRaw.medDom),
   };
   const soldResidential = soldRaw.count > 0 ? {
     count: soldRaw.count, avgSoldPrice: r(soldRaw.avgSoldPrice), medSoldPrice: r(soldRaw.medSoldPrice),
     ...soldSizeFields, avgListToSaleDiscountPct: r(soldRaw.avgListToSaleDiscount, 1),
-    avgDom: r(soldRaw.avgDom), medDom: r(soldRaw.medDom), sizeBandCounts: soldRaw.sizeBands,
+    sizeBandCounts: soldRaw.sizeBands,
     avgBeds: r(soldRaw.avgBeds, 1), avgBaths: r(soldRaw.avgBaths, 1),
   } : null;
 
