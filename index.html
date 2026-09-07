@@ -4134,7 +4134,7 @@ function renderAiAnalysisPanel() {
     return;
   }
   if (currentAiAnalysis.error) {
-    panel.innerHTML = `<p class="chart-hint" style="color:var(--red);">Couldn't generate an analysis: ${chartEsc(currentAiAnalysis.error)}</p>`;
+    panel.innerHTML = `<p class="chart-hint" style="color:var(--red);">${chartEsc(friendlyAiErrorMessage(currentAiAnalysis.error))}</p>`;
     btn.textContent = 'Try again';
     return;
   }
@@ -4155,6 +4155,23 @@ function renderAiAnalysisPanel() {
 // The only place this feature ever calls the registry — strictly on click,
 // never as a side effect of Analyze/filtering, so a click is always the
 // person deliberately asking for one (possibly cached, possibly billed) call.
+// Turns whatever raw error text the backend/Gemini API returned into
+// something a client-facing screen can actually show. The raw text (stack
+// traces, quota-metric names, doc links) is genuinely useful in Apps
+// Script's own execution log for debugging, but has no business appearing
+// in the tool itself — an agent or client seeing "generativelanguage.
+// googleapis.com/generate_content_free_tier_requests" reads as broken, not
+// busy. Quota/rate-limit errors specifically get their own clear message
+// since they're the one case with a genuinely different meaning worth
+// naming ("we're out of AI requests for today," not "something's wrong").
+function friendlyAiErrorMessage(rawError) {
+  const msg = String(rawError || '');
+  if (/quota|rate.?limit|resource_exhausted|429|exceeded/i.test(msg)) {
+    return 'Unable to create AI analysis due to high demand. Please retry tomorrow.';
+  }
+  return 'Unable to create AI analysis right now. Please try again in a few minutes.';
+}
+
 async function generateAiAnalysis() {
   const btn = document.getElementById('btn-generate-ai-analysis');
   if (!REGISTRY_WEBAPP_URL) {
