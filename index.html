@@ -1029,6 +1029,28 @@
   </div>
 
   <div class="report-customize-panel" style="margin-bottom:20px;">
+    <p class="report-customize-title">Edit Area Boundaries</p>
+    <p class="chart-hint" style="margin-bottom:10px;">Pick an area, drag its points on the map to adjust the boundary, then save. Saved boundaries live in the Sheet now, not in this file — changes take effect immediately for every agent, with no redeploy needed.</p>
+    <div class="custom-select" id="boundary-area-dropdown">
+      <button type="button" class="custom-select-trigger" id="boundary-area-trigger">
+        <span id="boundary-area-trigger-label">Select an area…</span>
+        <span class="custom-select-chevron">▾</span>
+      </button>
+      <div class="custom-select-menu" id="boundary-area-menu"></div>
+    </div>
+    <div id="boundary-edit-map" style="height:420px; border-radius:14px; overflow:hidden; border:1px solid var(--hairline); margin:14px 0; display:none;"></div>
+    <div id="boundary-edit-actions" style="display:none; gap:10px;">
+      <button class="primary" id="btn-save-boundary" type="button">Save Boundary</button>
+      <button class="ghost" id="btn-cancel-boundary-edit" type="button">Cancel</button>
+    </div>
+    <p class="chart-hint" id="boundary-edit-status" style="margin-top:10px;"></p>
+    <div class="divider" style="margin:20px 0;"></div>
+    <p class="chart-hint" style="margin-bottom:8px;">One-time step, only needed once: copies every area's current boundary (including the ones still hardcoded in this file) into the Sheet, so they're all editable above. Safe to click more than once — it just overwrites the Sheet with whatever this file's boundaries currently are, so don't run it again after you've made edits above unless you want to undo them.</p>
+    <button class="ghost" id="btn-migrate-boundaries" type="button">Copy current boundaries into the Sheet</button>
+    <p class="chart-hint" id="boundary-migrate-status" style="margin-top:8px;"></p>
+  </div>
+
+  <div class="report-customize-panel" style="margin-bottom:20px;">
     <p class="report-customize-title">AI Market Analysis</p>
     <p class="chart-hint" style="margin-bottom:10px;">Goes through every known area and asks for a fresh AI analysis. Areas whose numbers haven't changed since their last write-up cost nothing — the backend serves the cached result instead of calling the API — so this is safe to run daily, or whenever there's spare quota, without worrying about wasting requests on areas that don't need one.</p>
     <button class="ghost" id="btn-refresh-all-ai-analyses" type="button">Refresh AI analyses for all areas</button>
@@ -7734,6 +7756,128 @@ async function loadKnownAreas() {
 }
 loadKnownAreas();
 
+// Fetched once per page load (the shared promise below means a second
+// caller just awaits the same in-flight request rather than firing a
+// redundant one) — both the Agent picker grid and Admin's boundary editor
+// need this, and whichever opens first shouldn't have to wait on the other.
+// Sheet-saved boundaries always win over the hardcoded fallback for any area
+// present there; if the fetch fails or the registry isn't configured yet,
+// AREA_BOUNDARIES simply keeps its hardcoded values — nothing breaks.
+let areaBoundariesFetchPromise = null;
+function fetchAreaBoundariesFromRegistry() {
+  if (areaBoundariesFetchPromise) return areaBoundariesFetchPromise;
+  if (!REGISTRY_WEBAPP_URL) return Promise.resolve();
+  areaBoundariesFetchPromise = fetchJsonWithRetry(REGISTRY_WEBAPP_URL + '?action=areaBoundaries')
+    .then(result => { if (result.success && result.boundaries) Object.assign(AREA_BOUNDARIES, result.boundaries); })
+    .catch(err => console.warn('Could not fetch area boundaries from registry, using hardcoded fallback:', err));
+  return areaBoundariesFetchPromise;
+}
+fetchAreaBoundariesFromRegistry();
+
+// ---------- Admin: Edit Area Boundaries ----------
+let boundaryEditMap = null;
+let boundaryEditFeatureGroup = null;
+let boundaryEditAreaName = null;
+
+function populateBoundaryAreaMenu() {
+  const menu = document.getElementById('boundary-area-menu');
+  if (!menu) return; // Admin View markup not on this screen yet
+  const areas = Object.keys(AREA_BOUNDARIES).sort();
+  menu.innerHTML = areas.map(a => `<div class="custom-select-option" data-value="${chartEsc(a)}">${chartEsc(a)}</div>`).join('');
+  menu.querySelectorAll('.custom-select-option').forEach(opt => {
+    opt.addEventListener('click', () => selectBoundaryArea(opt.dataset.value));
+  });
+}
+document.getElementById('boundary-area-trigger').addEventListener('click', () => {
+  document.getElementById('boundary-area-dropdown').classList.toggle('open');
+});
+document.addEventListener('click', e => {
+  const dropdown = document.getElementById('boundary-area-dropdown');
+  if (dropdown && !dropdown.contains(e.target)) dropdown.classList.remove('open');
+});
+
+async function selectBoundaryArea(areaName) {
+  document.getElementById('boundary-area-dropdown').classList.remove('open');
+  document.getElementById('boundary-area-trigger-label').textContent = areaName;
+  boundaryEditAreaName = areaName;
+  document.getElementById('boundary-edit-status').textContent = '';
+
+  const mapEl = document.getElementById('boundary-edit-map');
+  mapEl.style.display = 'block';
+  document.getElementById('boundary-edit-actions').style.display = 'flex';
+
+  // Tear down any previous map instance first — this panel can be used to
+  // edit several areas back to back in one Admin session.
+  if (boundaryEditMap) { boundaryEditMap.remove(); boundaryEditMap = null; }
+
+  boundaryEditMap = L.map(mapEl, { attributionControl: false, zoomControl: true });
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', { maxZoom: 16 }).addTo(boundaryEditMap);
+
+  const geojson = AREA_BOUNDARIES[areaName];
+  boundaryEditFeatureGroup = new L.FeatureGroup();
+  boundaryEditMap.addLayer(boundaryEditFeatureGroup);
+  L.geoJSON(geojson, { style: { color: CUSTOM_BOUNDARY_COLOR, weight: 2, fillColor: CUSTOM_BOUNDARY_COLOR, fillOpacity: 0.15 } })
+    .eachLayer(l => boundaryEditFeatureGroup.addLayer(l));
+  boundaryEditMap.fitBounds(boundaryEditFeatureGroup.getBounds(), { padding: [20, 20] });
+
+  // Puts every vertex directly into drag mode immediately — no separate
+  // "click Edit first" step, since dragging points is the entire point of
+  // this screen. L.EditToolbar.Edit is leaflet-draw's own edit-mode class;
+  // this file already reaches into this same plugin's internals elsewhere
+  // (the custom-area draw tool), so this isn't a new kind of dependency.
+  new L.EditToolbar.Edit(boundaryEditMap, { featureGroup: boundaryEditFeatureGroup }).enable();
+
+  setTimeout(() => boundaryEditMap.invalidateSize(), 50); // container may have just become visible (display:none → block)
+}
+
+document.getElementById('btn-save-boundary').addEventListener('click', async () => {
+  if (!boundaryEditAreaName || !boundaryEditFeatureGroup) return;
+  const statusEl = document.getElementById('boundary-edit-status');
+  if (!boundaryEditFeatureGroup.getLayers().length) { statusEl.textContent = 'Nothing to save — no shape found.'; return; }
+  if (!REGISTRY_WEBAPP_URL) { statusEl.textContent = 'No registry Web App URL configured (see Registry sync settings).'; return; }
+  const geojson = boundaryEditFeatureGroup.toGeoJSON(); // a FeatureCollection — same shape AREA_BOUNDARIES already uses
+  statusEl.textContent = 'Saving…';
+  try {
+    const resp = await fetch(REGISTRY_WEBAPP_URL + '?action=saveAreaBoundary', {
+      method: 'POST', body: JSON.stringify({ areaTag: boundaryEditAreaName, geojson }),
+    });
+    const result = await resp.json();
+    if (!result.success) throw new Error(result.error || 'Unknown error from the registry.');
+    AREA_BOUNDARIES[boundaryEditAreaName] = geojson; // reflected immediately — no refetch needed
+    statusEl.textContent = `Saved "${boundaryEditAreaName}" ✓ — live for every agent immediately.`;
+  } catch (err) {
+    statusEl.textContent = 'Save failed: ' + err.message;
+  }
+});
+
+document.getElementById('btn-cancel-boundary-edit').addEventListener('click', () => {
+  if (boundaryEditMap) { boundaryEditMap.remove(); boundaryEditMap = null; }
+  document.getElementById('boundary-edit-map').style.display = 'none';
+  document.getElementById('boundary-edit-actions').style.display = 'none';
+  document.getElementById('boundary-edit-status').textContent = '';
+  document.getElementById('boundary-area-trigger-label').textContent = 'Select an area…';
+  boundaryEditAreaName = null;
+});
+
+document.getElementById('btn-migrate-boundaries').addEventListener('click', async () => {
+  const statusEl = document.getElementById('boundary-migrate-status');
+  if (!REGISTRY_WEBAPP_URL) { statusEl.textContent = 'No registry Web App URL configured.'; return; }
+  statusEl.textContent = 'Copying…';
+  try {
+    const resp = await fetch(REGISTRY_WEBAPP_URL + '?action=bulkSeedAreaBoundaries', {
+      method: 'POST', body: JSON.stringify({ boundaries: AREA_BOUNDARIES }),
+    });
+    const result = await resp.json();
+    if (!result.success) throw new Error(result.error || 'Unknown error from the registry.');
+    statusEl.textContent = `Done — ${result.count} area(s) copied into the Sheet.`;
+    populateBoundaryAreaMenu(); // pick up anything new
+  } catch (err) {
+    statusEl.textContent = 'Failed: ' + err.message;
+  }
+});
+
+fetchAreaBoundariesFromRegistry().then(populateBoundaryAreaMenu);
+
 // ---------- Screen navigation (landing / Agent View / Admin View) ----------
 function showScreen(name) {
   document.getElementById('screen-landing').style.display = 'none';
@@ -7979,7 +8123,6 @@ function isAgentUnlocked() { return localStorage.getItem(AGENT_UNLOCK_KEY) === '
 
 function enterAdminView() {
   chooseLandingHalf(document.getElementById('card-admin'), () => showScreen('admin'));
-  maybeAutoRefreshAiAnalyses();
 }
 
 // Which view the currently-open gate modal is unlocking — set right before
@@ -8131,7 +8274,15 @@ function areasContainingPoint(lat, lng) {
   return hits;
 }
 
-const AREA_BOUNDARIES = {
+// Hardcoded fallback — every area's boundary as it existed before boundaries
+// moved to the Sheet (see AREA_BOUNDARIES_SHEET_NAME / getAreaBoundaries_ in
+// RegistrySync.gs). `let`, not `const`: fetchAreaBoundariesFromRegistry()
+// below overwrites/extends this object at load time with whatever's saved
+// in the Sheet, which always wins for any area present there. If the Sheet
+// hasn't been seeded yet (or a request fails), these hardcoded values are
+// what the tool falls back to — so nothing breaks mid-migration.
+let AREA_BOUNDARIES = {
+  'Curridabat': {"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":[[[-84.005677,9.921301],[-84.0041387,9.9201785],[-84.0030847,9.9187755],[-84.0021731,9.9169234],[-84.0021446,9.9147627],[-84.0037399,9.9119566],[-84.006607,9.9111161],[-84.0068156,9.9084674],[-84.0118687,9.9058643],[-84.0174874,9.9091045],[-84.0205703,9.9111138],[-84.0249512,9.9122783],[-84.0291005,9.9128264],[-84.0311171,9.9124839],[-84.0352662,9.9111596],[-84.0371438,9.9107029],[-84.0405169,9.9084348],[-84.0417816,9.9091232],[-84.0423141,9.9072217],[-84.0439448,9.9065988],[-84.0450098,9.9069595],[-84.0449433,9.9056153],[-84.0473395,9.9044023],[-84.0483379,9.9035499],[-84.0502244,9.9076158],[-84.0512126,9.9085172],[-84.0541772,9.9091662],[-84.0576542,9.9107525],[-84.0560072,9.9143579],[-84.054836,9.916413],[-84.0539576,9.9192252],[-84.0492801,9.9238157],[-84.0459861,9.9255102],[-84.0454005,9.9283944],[-84.0432776,9.9301609],[-84.0366476,9.9336392],[-84.0259341,9.9346175],[-84.0206713,9.9373882],[-84.0177223,9.9384608],[-84.0150455,9.9382373],[-84.0103093,9.9377281],[-84.007814,9.9375047],[-84.0058789,9.9332449],[-84.0048597,9.9295465],[-84.0040015,9.9278029],[-84.005677,9.921301]]]}}]},
   'Hacienda Pinilla': {"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":[[[-85.8398586,10.2356098],[-85.8375125,10.238536],[-85.8373761,10.2427507],[-85.8319473,10.2436366],[-85.8276327,10.2452506],[-85.8230231,10.2456172],[-85.8217355,10.2476026],[-85.8195617,10.2481374],[-85.8186446,10.2495746],[-85.8207166,10.2516803],[-85.8209876,10.2580749],[-85.8218313,10.2636634],[-85.8265915,10.2689328],[-85.8393577,10.2732997],[-85.8479627,10.2748032],[-85.8516256,10.2681439],[-85.8544254,10.2622191],[-85.8526403,10.259877],[-85.852223,10.2548503],[-85.8485618,10.2454092],[-85.8472636,10.2443978],[-85.8475881,10.2427477],[-85.8461276,10.2417363],[-85.8441803,10.23982],[-85.8426657,10.2370519],[-85.8398586,10.2356098]]]}}]},
   'Papagayo': {"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":[[[-85.7309845,10.5446489],[-85.725342,10.5336725],[-85.7036127,10.528007],[-85.684075,10.5264832],[-85.6761579,10.525853],[-85.6706359,10.5300207],[-85.6689626,10.5374238],[-85.6692415,10.5442784],[-85.6657595,10.5536354],[-85.6591608,10.5610955],[-85.6490691,10.5690131],[-85.6438505,10.5728765],[-85.6470977,10.5860367],[-85.6534242,10.5922351],[-85.6607627,10.5887807],[-85.6623338,10.5913547],[-85.6658689,10.5932852],[-85.6703205,10.5938],[-85.6809256,10.5923843],[-85.6855081,10.5762967],[-85.6955896,10.5762967],[-85.703969,10.5710198],[-85.6928401,10.564327],[-85.695982,10.5565083],[-85.7027903,10.5530331],[-85.7144429,10.5581816],[-85.7213821,10.5509736],[-85.7291068,10.5498152],[-85.7309845,10.5446489]]]}}]},
   'Escazú': {"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":[[[-84.1818367,9.9675455],[-84.1844784,9.9616912],[-84.1775738,9.9573744],[-84.1751773,9.9557452],[-84.1746522,9.9538563],[-84.1756111,9.9528893],[-84.1740357,9.9505056],[-84.1731415,9.9503982],[-84.1722845,9.9511518],[-84.1729184,9.9505465],[-84.1717743,9.9495544],[-84.1697981,9.949921],[-84.1688402,9.9499249],[-84.1671742,9.9459569],[-84.1662461,9.9447908],[-84.1663752,9.9408071],[-84.167666,9.9391967],[-84.1657944,9.9373531],[-84.1630338,9.9348829],[-84.1625854,9.9295486],[-84.1653731,9.9259208],[-84.1604126,9.9181404],[-84.1604126,9.9134938],[-84.1631642,9.907453],[-84.1627689,9.8986313],[-84.1597028,9.8939844],[-84.1361348,9.8773002],[-84.1223794,9.8874229],[-84.1147102,9.9010964],[-84.120456,9.9121234],[-84.1240265,9.91636],[-84.1207401,9.929965],[-84.1246786,9.935531],[-84.1366461,9.9379466],[-84.1559483,9.9520411],[-84.1598721,9.9554228],[-84.164973,9.9542633],[-84.1688968,9.9618961],[-84.1746844,9.9667268],[-84.1818367,9.9675455]]]}}]},
@@ -8481,6 +8632,8 @@ async function loadAgentLocations() {
   const grid = document.getElementById('agent-location-grid');
   const statusEl = document.getElementById('agent-picker-status');
   const webAppUrl = REGISTRY_WEBAPP_URL;
+
+  await fetchAreaBoundariesFromRegistry(); // no-op if already resolved — see the shared-promise comment above
 
   const allAreaNames = Object.keys(AREA_BOUNDARIES).sort();
   grid.classList.remove('is-busy');
@@ -8836,7 +8989,10 @@ async function loadAgentReport(area) {
     const result = await fetchJsonWithRetry(webAppUrl + '?action=getAreaListings&area=' + encodeURIComponent(area));
     if (!result.success) { statusEl.textContent = 'Could not load report: ' + (result.error || 'unknown error'); resetLocationGrid(); resetProgressBar('area-load-progress'); return; }
     const rows = result.listings || [];
-    if (rows.length === 0) { statusEl.textContent = `No listings found for ${area}.`; resetLocationGrid(); resetProgressBar('area-load-progress'); return; }
+    if (rows.length === 0) {
+      statusEl.textContent = `No listings tagged with "${area}" yet. If this area's boundary was just added or edited, that's expected — listings only get tagged with an area at sync time, so go to Admin View and re-sync (even without changing any data) to have every listing re-checked against the current boundaries.`;
+      resetLocationGrid(); resetProgressBar('area-load-progress'); return;
+    }
     bumpProgressBar('area-load-progress', 35);
 
     mergedListings = {};
@@ -9152,6 +9308,15 @@ async function syncToRegistry() {
       }
       statusEl.textContent = msg;
       loadKnownAreas(); // pick up a brand-new area name for next time
+      // Moved here from "Admin View opened" — that fired immediately on
+      // entry, before there was any chance to upload new data first, wasting
+      // a day's quota refreshing against data that was about to be replaced
+      // anyway. Firing right after a successful sync instead means it only
+      // ever runs against data that's actually current. Still only once per
+      // day (maybeAutoRefreshAiAnalyses' own guard), so repeated syncs in
+      // the same session (e.g. from toggling a few flags right after upload)
+      // don't each trigger their own refresh pass.
+      maybeAutoRefreshAiAnalyses();
     } else {
       statusEl.textContent = 'Registry sync error: ' + (result.error || 'unknown error');
     }
