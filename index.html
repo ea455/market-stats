@@ -1058,9 +1058,15 @@
   </div>
 
   <div class="dropzone" id="dz">
-    <div class="dz-label">OMNI CSV Export</div>
-    <div class="dz-hint" id="dz-hint">Drop your OMNI CSV export(s) here — multiple files are fine for a large or nationwide pull — or click to browse</div>
+    <div class="dz-label">OMNI CSV Export — Exclusive Listings</div>
+    <div class="dz-hint" id="dz-hint">Drop your OMNI CSV export(s) of exclusive listings here — multiple files are fine for a large or nationwide pull — or click to browse</div>
     <input type="file" id="file-input" accept=".csv,text/csv" multiple>
+  </div>
+
+  <div class="dropzone" id="dz-open" style="margin-top:12px;">
+    <div class="dz-label">OMNI CSV Export — Open Listings</div>
+    <div class="dz-hint" id="dz-open-hint">Listings with no exclusive listing agreement. Everything dropped here is tagged "Open" and can be shown or hidden with the Listing Agreement filter. The same property listed by several brokers is detected and kept only once.</div>
+    <input type="file" id="file-input-open" accept=".csv,text/csv" multiple>
   </div>
 
   <div class="file-list" id="file-list"></div>
@@ -1086,6 +1092,10 @@
     <div class="filter-row">
       <span class="filter-label">Property Type:</span>
       <div class="filter-pills" id="property-type-filter-pills"></div>
+    </div>
+    <div class="filter-row">
+      <span class="filter-label">Listing Agreement:</span>
+      <div class="filter-pills" id="agreement-filter-pills"></div>
     </div>
     <div class="filter-row">
       <span class="filter-label">Status:</span>
@@ -1427,6 +1437,7 @@ function splitStatValueHtml(typeSplit, fmtFn) {
   </div>`;
 }
 function passesPropertyTypeFilter(d) {
+  if (!passesAgreementFilter(d)) return false;
   if (isLandListing(d)) return propertyTypeFilters.has('Land');
   const group = residentialSubTypeGroup(d);
   if (!group) return false; // e.g. Buildings — never included regardless of filter
@@ -1442,10 +1453,29 @@ function passesPropertyTypeFilter(d) {
 // literal listing table but wrong for a function whose whole design assumes
 // "this is the residential-only computation."
 function passesResidentialTypeFilter(d) {
+  if (!passesAgreementFilter(d)) return false;
   if (isLandListing(d)) return false;
   const group = residentialSubTypeGroup(d);
   if (!group) return false;
   return propertyTypeFilters.has(group);
+}
+// ---------- Listing Agreement (Exclusive vs Open) ----------
+// OMNI also carries OPEN listings — any listing with no exclusive listing
+// agreement, so several brokerages can list the same property at once. They
+// come in through their own upload box in Admin View, and each listing
+// carries d.agreement = 'Exclusive' | 'Open' from there on (stored in the
+// registry's listing_agreement column; rows synced before this existed have
+// it blank, which always means Exclusive — everything uploaded before Open
+// Listings were added was exclusive). This is a VIEW filter only: it never
+// affects what gets synced to the registry (buildRegistryRows doesn't look
+// at it), so hiding Open Listings on screen can't delete them.
+const AGREEMENT_PRESETS = ['Exclusive', 'Open'];
+let agreementFilters = new Set(AGREEMENT_PRESETS); // default: both, never empty
+function listingAgreementOf(d) { return d && d.agreement === 'Open' ? 'Open' : 'Exclusive'; }
+function passesAgreementFilter(d) { return agreementFilters.has(listingAgreementOf(d)); }
+function agreementDisplay(a) { return a === 'Open' ? 'Open Listings' : 'Exclusives'; }
+function agreementFilterLabel() {
+  return agreementFilters.size === AGREEMENT_PRESETS.length ? 'Exclusives + Open Listings' : [...agreementFilters].map(agreementDisplay).join(' + ');
 }
 let userToggledOff = new Set(); // user overrode an auto-exclude to "include"
 let priceFilterMin = null;
@@ -1522,12 +1552,26 @@ dz.addEventListener('drop', e => {
 });
 fileInput.addEventListener('change', e => { addFiles([...e.target.files]); fileInput.value = ''; });
 
-function addFiles(files) {
+// Second upload box: same CSV format, but everything dropped here is tagged
+// as an Open listing (no exclusive agreement) instead of an Exclusive one.
+const dzOpen = document.getElementById('dz-open');
+const fileInputOpen = document.getElementById('file-input-open');
+dzOpen.addEventListener('click', () => fileInputOpen.click());
+dzOpen.addEventListener('dragover', e => { e.preventDefault(); dzOpen.classList.add('dragover'); });
+dzOpen.addEventListener('dragleave', () => dzOpen.classList.remove('dragover'));
+dzOpen.addEventListener('drop', e => {
+  e.preventDefault();
+  dzOpen.classList.remove('dragover');
+  addFiles([...e.dataTransfer.files], 'Open');
+});
+fileInputOpen.addEventListener('change', e => { addFiles([...e.target.files], 'Open'); fileInputOpen.value = ''; });
+
+function addFiles(files, agreement = 'Exclusive') {
   files.forEach(file => {
     const isCsv = file.type === 'text/csv' || file.name.toLowerCase().endsWith('.csv');
     if (!isCsv) return;
     const id = fileIdCounter++;
-    const record = { id, file, name: file.name, status: 'reading' };
+    const record = { id, file, name: file.name, status: 'reading', agreement };
     uploadedFiles.push(record);
     renderFileList();
     classifyCsvFile(record);
@@ -1567,7 +1611,7 @@ function renderFileList() {
   list.innerHTML = uploadedFiles.map(f => {
     let badge;
     if (f.status === 'reading') badge = `<span class="badge pending">reading…</span>`;
-    else if (f.status === 'csv') badge = `<span class="badge agent">OMNI CSV · ${f.csvRowCount} listings</span>`;
+    else if (f.status === 'csv') badge = `<span class="badge agent">OMNI CSV · ${f.agreement === 'Open' ? 'Open Listings · ' : ''}${f.csvRowCount} listings</span>`;
     else badge = `<span class="badge unknown">Unrecognized</span>`;
     return `<div class="file-chip">
       <span class="fname">${f.name}</span>
@@ -1584,7 +1628,9 @@ function renderFileList() {
   if (uploadedFiles.length > 0) {
     manifest.style.display = 'block';
     const csvRows = csvFiles.reduce((s, f) => s + (f.csvRowCount || 0), 0);
-    manifest.textContent = csvFiles.length ? `${csvFiles.length} OMNI CSV file(s), ${csvRows} rows total (before removing duplicate MLS IDs — Analyze will report the unique count)` : '';
+    const openCsvFiles = csvFiles.filter(f => f.agreement === 'Open');
+    const openCsvRows = openCsvFiles.reduce((s, f) => s + (f.csvRowCount || 0), 0);
+    manifest.textContent = csvFiles.length ? `${csvFiles.length} OMNI CSV file(s), ${csvRows} rows total${openCsvFiles.length ? ` (${openCsvRows} of them in ${openCsvFiles.length} Open Listings file(s))` : ''} (before removing duplicates — Analyze will report the unique count)` : '';
   } else {
     manifest.style.display = 'none';
   }
@@ -1820,6 +1866,7 @@ function areaTagDisplay(d) {
 
 // ---------- Analysis ----------
 let lastDuplicateCount = 0;
+let lastAgreementDupesExcluded = 0; // listings auto-removed this run as duplicates involving an Open listing
 let lastUnmatchedAreaCount = 0;
 
 function analyze() {
@@ -1840,7 +1887,12 @@ function analyze() {
     const parsed = parseOmniCsv(f.text);
     Object.entries(parsed).forEach(([mls, d]) => {
       (seenIn[mls] = seenIn[mls] || new Set()).add(f.name);
-      merged[mls] = { ...d, mls };
+      // If the same MLS# shows up in both an Exclusive and an Open file it's
+      // one real record — Exclusive wins, since an exclusive agreement is the
+      // more specific designation (and the property is, by definition, not
+      // open if one exists).
+      const agreement = (f.agreement === 'Open' && (!merged[mls] || merged[mls].agreement === 'Open')) ? 'Open' : 'Exclusive';
+      merged[mls] = { ...d, mls, agreement };
     });
   });
 
@@ -2210,6 +2262,37 @@ function computeFlagsAndExclusions(merged) {
   // rather than making the user hunt it down and uncheck it manually. If List
   // Dates are missing or identical, there's no safe basis for that assumption,
   // so both sides get a flag instead and nothing is auto-excluded.
+  // ---- Duplicates involving OPEN listings ----
+  // Several brokerages listing the same property at once is the normal shape
+  // of open listings (no exclusive agreement), so a duplicate here isn't a
+  // mistake to puzzle over — one copy should simply win and the rest go away,
+  // for stats AND for the registry (an auto-excluded listing is deleted from
+  // the registry on the next sync, same as a manually unchecked one). The
+  // keeper: an Exclusive listing always beats an Open copy of the same
+  // property; between two Opens, the older List Date wins; with no usable
+  // dates the lower MLS# wins (arbitrary but stable — the copies carry the
+  // same numbers, so which one survives can't move a statistic). Everything
+  // is flagged and reversible via "Include" in the All Listings table. Exclusive-
+  // vs-Exclusive pairs keep the more cautious original behavior below.
+  lastAgreementDupesExcluded = 0;
+  const dropOpenDuplicate = (mlsA, a, mlsB, b, basis, datesUsable, specsOf) => {
+    const agA = listingAgreementOf(a), agB = listingAgreementOf(b);
+    let keepMls, keep, dropMls, drop, why;
+    if (agA !== agB) {
+      [keepMls, keep, dropMls, drop] = agA === 'Exclusive' ? [mlsA, a, mlsB, b] : [mlsB, b, mlsA, a];
+      why = 'The exclusive listing is the one kept';
+    } else if (datesUsable) {
+      [keepMls, keep, dropMls, drop] = new Date(a.listDate) <= new Date(b.listDate) ? [mlsA, a, mlsB, b] : [mlsB, b, mlsA, a];
+      why = 'The older listing is the one kept';
+    } else {
+      [keepMls, keep, dropMls, drop] = String(mlsA).localeCompare(String(mlsB), undefined, { numeric: true }) <= 0 ? [mlsA, a, mlsB, b] : [mlsB, b, mlsA, a];
+      why = 'List Dates couldn\'t separate them, so the lower MLS# is the one kept';
+    }
+    addFlag(dropMls, `Duplicate of ${listingAgreementOf(keep) === 'Open' ? 'open' : 'exclusive'} MLS# ${keepMls} (${specsOf(keep)}) — ${basis}. ${why}; this ${listingAgreementOf(drop) === 'Open' ? 'open' : 'exclusive'} copy is auto-excluded from every stat and report, and removed from the registry on the next sync. Re-check "Include" in the All Listings table if that's wrong.`, 'info');
+    if (!excludedFromReports.has(dropMls)) lastAgreementDupesExcluded++;
+    excludedFromReports.add(dropMls);
+  };
+
   const activeForDupeCheck = Object.entries(merged).filter(([mls, d]) =>
     (d.status || '').trim().toLowerCase() === 'active' && !isLandListing(d) && d.beds != null && d.baths != null && d.sqm && d.price
   );
@@ -2240,6 +2323,12 @@ function computeFlagsAndExclusions(merged) {
         const dateB = b.listDate ? new Date(b.listDate) : null;
         const bothDatesUsable = dateA && dateB && !isNaN(dateA) && !isNaN(dateB) && dateA.getTime() !== dateB.getTime();
 
+        if (a.agreement === 'Open' || b.agreement === 'Open') {
+          dropOpenDuplicate(mlsA, a, mlsB, b, 'same Beds/Baths, same Living m², same Price', bothDatesUsable,
+            d => `${fmtMoney(d.price)}, ${d.beds}bd/${d.baths}ba, ${d.sqm}m²`);
+          continue;
+        }
+
         if (bothDatesUsable) {
           const [newerMls, newer, olderMls, older] = dateA > dateB ? [mlsA, a, mlsB, b] : [mlsB, b, mlsA, a];
           addFlag(newerMls, `Possible duplicate of MLS# ${olderMls} (${fmtMoney(older.price)}, ${older.beds}bd/${older.baths}ba, ${older.sqm}m², listed ${older.listDate}) — same Beds/Baths, same Living m², same Price. This one has the newer List Date (${newer.listDate}), so it's often the accidental re-list — auto-excluded from every stat and report below. Re-check "Include" in the All Listings table if that's wrong.`, 'info');
@@ -2249,6 +2338,47 @@ function computeFlagsAndExclusions(merged) {
           addFlag(mlsA, noteFor(b, mlsB), 'info');
           addFlag(mlsB, noteFor(a, mlsA), 'info');
         }
+      }
+    }
+  });
+
+  // Open LAND duplicates. Land has no Beds/Baths/Living m² to match on, and
+  // Lot m² + Price alone isn't safe — a development selling a dozen identical
+  // lots at one price is normal, and those are genuinely different parcels.
+  // So this also requires the two to sit at essentially the same spot (within
+  // 15 m, allowing for geotagging noise between brokers). Only pairs involving
+  // at least one Open listing are considered; exclusive land is left alone.
+  const metersBetween = (la1, ln1, la2, ln2) => {
+    const R = 6371000, rad = x => x * Math.PI / 180;
+    const dLa = rad(la2 - la1), dLn = rad(ln2 - ln1);
+    const h = Math.sin(dLa / 2) ** 2 + Math.cos(rad(la1)) * Math.cos(rad(la2)) * Math.sin(dLn / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  };
+  const landGroups = new Map();
+  Object.entries(merged).forEach(([mls, d]) => {
+    if ((d.status || '').trim().toLowerCase() !== 'active' || !isLandListing(d)) return;
+    if (!d.lot || !d.price || d.lat == null || d.lng == null || isNaN(d.lat) || isNaN(d.lng)) return;
+    const key = `${d.lot}|${d.price}`;
+    if (!landGroups.has(key)) landGroups.set(key, []);
+    landGroups.get(key).push([mls, d]);
+  });
+  landGroups.forEach(group => {
+    if (group.length < 2) return;
+    for (let i = 0; i < group.length; i++) {
+      for (let j = i + 1; j < group.length; j++) {
+        const [mlsA, a] = group[i];
+        const [mlsB, b] = group[j];
+        if (a.agreement !== 'Open' && b.agreement !== 'Open') continue;
+        if (excludedFromReports.has(mlsA) || excludedFromReports.has(mlsB)) continue; // already resolved against another copy
+        if (metersBetween(a.lat, a.lng, b.lat, b.lng) > 15) continue;
+        const areaOf = d => (d.subdivision || d.area || d.city || '').trim().toLowerCase();
+        const areaA = areaOf(a), areaB = areaOf(b);
+        if (areaA && areaB && areaA !== areaB) continue;
+        const dateA = a.listDate ? new Date(a.listDate) : null;
+        const dateB = b.listDate ? new Date(b.listDate) : null;
+        const datesUsable = dateA && dateB && !isNaN(dateA) && !isNaN(dateB) && dateA.getTime() !== dateB.getTime();
+        dropOpenDuplicate(mlsA, a, mlsB, b, 'same Lot m², same Price, and within 15 m of each other', datesUsable,
+          d => `${fmtMoney(d.price)}, ${d.lot} m² lot`);
       }
     }
   });
@@ -2674,7 +2804,7 @@ function computeLandStats(onlyStatus = null) {
     ? statusGroup(d.status) === onlyStatus
     : passesStatusFilter(d);
   const entries = Object.entries(merged).filter(([m, d]) =>
-    isLandListing(d) && matchesStatus(d) && passesPriceFilter(d) && !badPriceOrArea(m) && isReportIncluded(d)
+    isLandListing(d) && passesAgreementFilter(d) && matchesStatus(d) && passesPriceFilter(d) && !badPriceOrArea(m) && isReportIncluded(d)
   );
   const all = entries.map(([_, d]) => d);
   const count = all.length;
@@ -2737,7 +2867,7 @@ function computeSoldLandStats() {
   const badPriceOrArea = m => activeExcludeArea.has(m) || activeExcludePrice.has(m) || activeExcludeSoldPrice.has(m);
 
   const entries = Object.entries(mergedListings).filter(([m, d]) =>
-    isLandListing(d) && d.status && d.status.trim().toLowerCase() === 'closed' && passesPriceFilter(d) && !badPriceOrArea(m) && isReportIncluded(d)
+    isLandListing(d) && passesAgreementFilter(d) && d.status && d.status.trim().toLowerCase() === 'closed' && passesPriceFilter(d) && !badPriceOrArea(m) && isReportIncluded(d)
   );
   const lotEntries = entries.filter(([m, d]) => d.lot && !activeExcludeLot.has(m));
   const noLotCount = entries.length - lotEntries.length;
@@ -4137,6 +4267,8 @@ function buildAiAnalysisDigest() {
   return {
     area, asOfDate: new Date().toISOString().slice(0, 10),
     statusesIncluded: [...statusFilters], propertyTypesIncluded: [...propertyTypeFilters],
+    // Only present when the view is narrowed to ONE agreement type. Left out entirely for the default (both) so that adding this feature doesn't change every area's digest — the digest is the AI cache key, so a new always-present field would have forced a regeneration of every cached analysis and spent a day's quota on it.
+    ...(agreementFilters.size < AGREEMENT_PRESETS.length ? { listingAgreementsIncluded: [...agreementFilters] } : {}),
     residentialByStatus, soldResidential, landByStatus, soldLand,
     brokerPerformance, absorption, monthsOfSupplyTrend, activeDomTrend_NOTfinalSales, activeListingCountTrend,
   };
@@ -4232,7 +4364,13 @@ document.getElementById('btn-generate-ai-analysis').addEventListener('click', ge
 // does, so there's no separate, potentially-drifting copy of the digest
 // logic to maintain — this just drives that same pipeline once per area
 // instead of once for whatever area is currently loaded.
-async function refreshAllAiAnalyses() {
+// opts.maxFresh: stop after this many NEW analyses (cached ones are free and
+// don't count). The automatic daily run passes a cap so it can never spend the
+// whole free-tier allowance (20 requests/day) and leave nothing for agents
+// generating an analysis on demand; the Admin button passes nothing (the
+// click event lands here as `opts`, which has no maxFresh) and runs uncapped.
+async function refreshAllAiAnalyses(opts) {
+  const maxFresh = (opts && typeof opts.maxFresh === 'number') ? opts.maxFresh : Infinity;
   const btn = document.getElementById('btn-refresh-all-ai-analyses');
   const statusEl = document.getElementById('ai-refresh-all-status');
   if (!REGISTRY_WEBAPP_URL) {
@@ -4251,14 +4389,14 @@ async function refreshAllAiAnalyses() {
   // uses, but Admin View has its own independent data loaded that shouldn't
   // be permanently overwritten by looping through registry areas.
   const snapshot = {
-    mergedListings, currentAreaTag, statusFilters, propertyTypeFilters, soldReportAllTime,
+    mergedListings, currentAreaTag, statusFilters, propertyTypeFilters, agreementFilters, soldReportAllTime,
     excludedFromReports, userToggledOff, priceFilterMin, priceFilterMax,
     reportLocationInputValue: document.getElementById('report-location-input').value,
   };
 
   btn.disabled = true;
   const origLabel = btn.textContent;
-  let cachedCount = 0, freshCount = 0, skippedCount = 0, erroredArea = null;
+  let cachedCount = 0, freshCount = 0, skippedCount = 0, erroredArea = null, cappedAt = null;
 
   try {
     for (let i = 0; i < areas.length; i++) {
@@ -4286,6 +4424,7 @@ async function refreshAllAiAnalyses() {
         priceFilterMin = null; priceFilterMax = null;
         statusFilters = new Set(['Active', 'Closed']);
         propertyTypeFilters = new Set(['SFH', 'Condo']);
+        agreementFilters = new Set(AGREEMENT_PRESETS);
         soldReportAllTime = false;
 
         const digest = buildAiAnalysisDigest();
@@ -4296,6 +4435,7 @@ async function refreshAllAiAnalyses() {
         const aiResult = await resp.json();
         if (!aiResult.success) throw new Error(aiResult.error || 'Unknown error from the registry.');
         if (aiResult.cached) cachedCount++; else freshCount++;
+        if (!aiResult.cached && freshCount >= maxFresh) { cappedAt = area; break; }
       } catch (err) {
         // A quota/rate-limit error means every remaining area would fail the
         // same way — stop cleanly here rather than burning through the rest
@@ -4304,14 +4444,22 @@ async function refreshAllAiAnalyses() {
         // quota resets) without needing to guess which areas are done.
         const msg = String(err.message || err);
         const looksLikeQuota = /quota|rate.?limit|resource_exhausted|429|exceeded/i.test(msg);
+        // An overload (503 / "high demand") is just as much a reason to stop:
+        // Google's servers refusing one request means they'll refuse the next
+        // twenty too, and every attempt still shows up as a request on the
+        // key — the old loop carried on through every remaining area during
+        // an overload, which is exactly what a burst of 503s followed by a
+        // few 429s on the usage dashboard looks like.
+        const looksOverloaded = /503|unavailable|overloaded|high demand/i.test(msg);
         if (looksLikeQuota) { erroredArea = { area, msg, quota: true }; break; }
+        if (looksOverloaded) { erroredArea = { area, msg, overloaded: true }; break; }
         erroredArea = { area, msg, quota: false }; // a genuine per-area error — note it and keep going, don't let one bad area stop the rest
       }
     }
   } finally {
     // Restore Admin's own session exactly as it was before this ran.
     mergedListings = snapshot.mergedListings; currentAreaTag = snapshot.currentAreaTag;
-    statusFilters = snapshot.statusFilters; propertyTypeFilters = snapshot.propertyTypeFilters;
+    statusFilters = snapshot.statusFilters; propertyTypeFilters = snapshot.propertyTypeFilters; agreementFilters = snapshot.agreementFilters;
     soldReportAllTime = snapshot.soldReportAllTime; excludedFromReports = snapshot.excludedFromReports;
     userToggledOff = snapshot.userToggledOff; priceFilterMin = snapshot.priceFilterMin; priceFilterMax = snapshot.priceFilterMax;
     document.getElementById('report-location-input').value = snapshot.reportLocationInputValue;
@@ -4326,6 +4474,10 @@ async function refreshAllAiAnalyses() {
   let summary = parts.length ? `Done — ${parts.join(', ')}.` : 'Done — nothing to update.';
   if (erroredArea && erroredArea.quota) {
     summary += ` Stopped early at "${erroredArea.area}" — looks like the daily AI quota is used up. Try again after it resets.`;
+  } else if (erroredArea && erroredArea.overloaded) {
+    summary += ` Stopped early at "${erroredArea.area}" — Google's AI service is overloaded right now (nothing wrong on our side). The remaining areas will be picked up on the next run.`;
+  } else if (cappedAt) {
+    summary += ` Paused after ${freshCount} new analyses (at "${cappedAt}") to leave room in today's free AI allowance — the rest will be picked up on the next run.`;
   } else if (erroredArea) {
     summary += ` One area ("${erroredArea.area}") failed: ${erroredArea.msg}`;
   }
@@ -4599,6 +4751,7 @@ function renderTable() {
       if (cb.checked) excludedFromReports.delete(mls); else excludedFromReports.add(mls);
       cb.closest('tr').classList.toggle('excluded-row', !cb.checked);
       markSummaryStale();
+      renderAgreementFilterPills();
       renderStats();
       renderSoldReport();
       renderLandReport();
@@ -6282,6 +6435,7 @@ async function loadAreaForReview() {
     statusFilters = new Set(STATUS_FILTER_PRESETS);
     soldReportAllTime = true; // Admin's review flows default to full history, not the agent-facing trailing-12-months scope
     propertyTypeFilters = new Set(PROPERTY_TYPE_PRESETS);
+    agreementFilters = new Set(AGREEMENT_PRESETS);
     tableSortIdx = null;
     tableSortDir = 1;
     resetChartTimeRanges();
@@ -6293,6 +6447,7 @@ async function loadAreaForReview() {
     document.getElementById('report-last-updated').textContent = mostRecentUpdate ? `Data last updated: ${mostRecentUpdate}` : '';
     renderStatusFilterPills();
     renderPropertyTypeFilterPills();
+    renderAgreementFilterPills();
     renderPriceFilterPills();
     renderStats();
     renderSoldReport();
@@ -6365,6 +6520,7 @@ async function loadAllListingsForReview() {
     statusFilters = new Set(STATUS_FILTER_PRESETS);
     soldReportAllTime = true; // Admin's review flows default to full history, not the agent-facing trailing-12-months scope
     propertyTypeFilters = new Set(PROPERTY_TYPE_PRESETS);
+    agreementFilters = new Set(AGREEMENT_PRESETS);
     tableSortIdx = null;
     tableSortDir = 1;
     resetChartTimeRanges();
@@ -6376,6 +6532,7 @@ async function loadAllListingsForReview() {
     document.getElementById('report-last-updated').textContent = mostRecentUpdate ? `Data last updated: ${mostRecentUpdate}` : '';
     renderStatusFilterPills();
     renderPropertyTypeFilterPills();
+    renderAgreementFilterPills();
     renderPriceFilterPills();
     renderStats();
     renderSoldReport();
@@ -6423,6 +6580,7 @@ document.getElementById('btn-analyze').addEventListener('click', async () => {
     statusFilters = new Set(STATUS_FILTER_PRESETS);
     soldReportAllTime = true; // Admin's review flows default to full history, not the agent-facing trailing-12-months scope
     propertyTypeFilters = new Set(PROPERTY_TYPE_PRESETS);
+    agreementFilters = new Set(AGREEMENT_PRESETS);
     tableSortIdx = null;
     tableSortDir = 1;
     resetChartTimeRanges();
@@ -6433,7 +6591,10 @@ document.getElementById('btn-analyze').addEventListener('click', async () => {
     const unmatchedNote = lastUnmatchedAreaCount > 0
       ? ` ${lastUnmatchedAreaCount} listing${lastUnmatchedAreaCount === 1 ? '' : 's'} didn't fall inside any drawn area boundary (or had no coordinates) — synced, but won't appear in an Agent View report until a boundary covers them.`
       : '';
-    status.textContent = `Parsed ${Object.keys(mergedListings).length} unique listings.${dupNote}${unmatchedNote}`;
+    const openDupNote = lastAgreementDupesExcluded > 0
+      ? ` ${lastAgreementDupesExcluded} duplicate listing${lastAgreementDupesExcluded === 1 ? '' : 's'} of the same property found and removed (kept: the exclusive copy, else the older one — see the flags below, "Include" restores any).`
+      : '';
+    status.textContent = `Parsed ${Object.keys(mergedListings).length} unique listings.${dupNote}${openDupNote}${unmatchedNote}`;
     document.getElementById('results').style.display = 'block';
     {
       // Admin's data is always fresh at the moment of analysis — no registry
@@ -6446,6 +6607,7 @@ document.getElementById('btn-analyze').addEventListener('click', async () => {
     }
     renderStatusFilterPills();
     renderPropertyTypeFilterPills();
+    renderAgreementFilterPills();
     renderPriceFilterPills();
     renderStats();
     renderSoldReport();
@@ -6471,6 +6633,7 @@ function togglePropertyTypeFilter(pt) {
   propertyTypeFilters = next;
   markSummaryStale();
   renderPropertyTypeFilterPills();
+  renderAgreementFilterPills();
   renderStatusFilterPills();
   renderStats();
   renderSoldReport();
@@ -6484,6 +6647,7 @@ function setPropertyTypeFilter(set) {
   propertyTypeFilters = set;
   markSummaryStale();
   renderPropertyTypeFilterPills();
+  renderAgreementFilterPills();
   renderStatusFilterPills();
   renderStats();
   renderSoldReport();
@@ -6507,6 +6671,40 @@ function renderPropertyTypeFilterPills() {
   });
   document.getElementById('pt-select-all').addEventListener('click', () => setPropertyTypeFilter(new Set(PROPERTY_TYPE_PRESETS)));
   document.getElementById('pt-reset').addEventListener('click', () => setPropertyTypeFilter(new Set(['SFH', 'Condo'])));
+}
+
+// ---------- Listing Agreement filter ----------
+function rerenderAfterAgreementChange() {
+  markSummaryStale();
+  renderAgreementFilterPills();
+  renderPropertyTypeFilterPills();
+  renderStatusFilterPills();
+  renderStats();
+  renderSoldReport();
+  renderLandReport();
+  renderTrends();
+  renderFlagged();
+  renderTable();
+  renderCharts();
+}
+function toggleAgreementFilter(a) {
+  const next = new Set(agreementFilters);
+  if (next.has(a)) next.delete(a); else next.add(a);
+  if (next.size === 0) return; // blocked — always require at least one checked
+  agreementFilters = next;
+  rerenderAfterAgreementChange();
+}
+function setAgreementFilter(set) { agreementFilters = set; rerenderAfterAgreementChange(); }
+function renderAgreementFilterPills() {
+  const container = document.getElementById('agreement-filter-pills');
+  if (!container) return;
+  container.innerHTML = AGREEMENT_PRESETS.map(a => {
+    const active = agreementFilters.has(a);
+    const n = Object.values(mergedListings).filter(d => listingAgreementOf(d) === a && isReportIncluded(d)).length; // matches what reports use — removed duplicates and unchecked listings don't count
+    return `<button class="filter-pill ${active ? 'active' : ''}" data-ag="${a}">${active ? '✓ ' : ''}${agreementDisplay(a)} (${n})</button>`;
+  }).join('') + `<button class="ghost filter-mini-btn" id="ag-reset">Reset</button>`;
+  container.querySelectorAll('.filter-pill').forEach(btn => btn.addEventListener('click', () => toggleAgreementFilter(btn.dataset.ag)));
+  document.getElementById('ag-reset').addEventListener('click', () => setAgreementFilter(new Set(AGREEMENT_PRESETS)));
 }
 
 // ---------- Status filter ----------
@@ -6899,6 +7097,7 @@ ${liveStyles}
 
   <div class="report-filters">
     <div><b>Property Type</b>${[...propertyTypeFilters].join(' + ')}</div>
+    <div><b>Listing Agreement</b>${agreementFilterLabel()}</div>
     <div><b>Status</b>${statusFilterLabel()}</div>
     <div><b>Price</b>${priceFilterLabelForReport()}</div>
   </div>
@@ -8193,7 +8392,7 @@ function maybeAutoRefreshAiAnalyses() {
   const today = new Date().toISOString().slice(0, 10);
   if (localStorage.getItem(AI_REFRESH_LAST_RUN_KEY) === today) return; // already ran today
   localStorage.setItem(AI_REFRESH_LAST_RUN_KEY, today); // set immediately, not after completion — avoids re-triggering if Admin navigates away and back while it's still running
-  refreshAllAiAnalyses();
+  refreshAllAiAnalyses({ maxFresh: 8 }); // leaves ~12 of the 20 free daily requests for agents generating on demand; anything left over continues on the next day's run
 }
 
 document.getElementById('btn-back-from-agent-picker').addEventListener('click', () => showScreen('landing'));
@@ -8311,6 +8510,8 @@ let agentListingsLayer = null;   // marker-cluster group holding every listing d
 let enabledListingStatuses = null; // Set of statuses currently shown; null until first populated from STATUS_COLORS
 let allListingsRawCache = null;  // raw registry rows from getAllListings, cached for the picker session
 let allListingsFetchInFlight = null;
+let allListingsLastError = null; // set when the last fetch failed with nothing usable in hand — lets callers tell "couldn't load" apart from "genuinely no listings"
+let allListingsAreSlim = false;  // true when the rows in hand carry only the few columns the map needs (see getAllListings slim=1) — full rows for a drawn shape come from getListingsByIds
 
 // Lazy-init: Leaflet needs the container visible with real dimensions to
 // size itself correctly, so this only actually creates the map the first
@@ -8418,14 +8619,27 @@ function initAgentMap() {
 // chance those slow down or time out because of it. `force` (used by the
 // Admin flow that actually needs certainty of freshness) bypasses both
 // caches entirely.
-const ALL_LISTINGS_CACHE_KEY = 'agentMapListingsCache_v1';
+const ALL_LISTINGS_CACHE_KEY = 'agentMapListingsCache_v2'; // v2: rows may be the slim shape — a v1 entry (full rows, often too big to keep anyway) is ignored and cleaned up below
 const ALL_LISTINGS_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes — long enough to meaningfully cut repeat-visit load, short enough that a status/price change still shows up the same work session
+
+// Plain-language reason for a failed registry request, for the few places
+// that now tell the person what went wrong instead of silently showing
+// nothing (which looks identical to "there are no listings here").
+function describeRegistryError(err) {
+  if (!err) return 'unknown problem';
+  if (err.kind === 'network') return 'no connection to the registry';
+  if (err.kind === 'http') return 'registry error ' + (err.status || '');
+  if (err.kind === 'bad-json') return 'the registry sent an unexpected response — usually a timeout or an access-permission problem';
+  return err.message || 'unknown problem';
+}
 
 async function fetchAllListingsForMap(force) {
   const webAppUrl = REGISTRY_WEBAPP_URL;
   if (!webAppUrl) return [];
   if (allListingsRawCache && !force) return allListingsRawCache;
   if (allListingsFetchInFlight) return allListingsFetchInFlight;
+
+  try { localStorage.removeItem('agentMapListingsCache_v1'); } catch (err) { /* storage unavailable — nothing to clean */ }
 
   if (!force) {
     try {
@@ -8434,6 +8648,8 @@ async function fetchAllListingsForMap(force) {
         const cached = JSON.parse(cachedRaw);
         if (cached && Array.isArray(cached.rows) && (Date.now() - cached.savedAt) < ALL_LISTINGS_CACHE_TTL_MS) {
           allListingsRawCache = cached.rows;
+          allListingsAreSlim = !!cached.slim;
+          allListingsLastError = null;
           return allListingsRawCache;
         }
       }
@@ -8442,17 +8658,21 @@ async function fetchAllListingsForMap(force) {
 
   allListingsFetchInFlight = (async () => {
     try {
-      const result = await fetchJsonWithRetry(webAppUrl + '?action=getAllListings');
-      const rows = (result && result.success) ? (result.listings || []) : [];
+      const result = await fetchJsonWithRetry(webAppUrl + '?action=getAllListings&slim=1');
+      if (!result || !result.success) throw new Error((result && result.error) || 'the registry reported an error');
+      const rows = result.listings || [];
       allListingsRawCache = rows;
+      allListingsAreSlim = result.slim === true; // an older deployed script ignores slim=1 and sends full rows — then there's nothing more to fetch later
+      allListingsLastError = null;
       try {
-        localStorage.setItem(ALL_LISTINGS_CACHE_KEY, JSON.stringify({ savedAt: Date.now(), rows }));
+        localStorage.setItem(ALL_LISTINGS_CACHE_KEY, JSON.stringify({ savedAt: Date.now(), rows, slim: allListingsAreSlim }));
       } catch (err) {
         console.warn('Could not cache listings locally (continuing without it — this only affects repeat-visit load, not correctness):', err);
       }
       return rows;
     } catch (err) {
       console.error('Could not load listings for map dots:', err);
+      allListingsLastError = err;
       return allListingsRawCache || [];
     } finally {
       allListingsFetchInFlight = null;
@@ -8527,12 +8747,20 @@ function setDotPopupsEnabled(enabled) {
 // Loads (or reuses the cache) and paints the dots — called once when the
 // picker screen is shown. Silent no-op if there's no registry connected yet,
 // same as the rest of the picker's optional/best-effort data.
-async function loadListingDotsForMap() {
+async function loadListingDotsForMap(force = false) {
   const note = document.getElementById('agent-map-loading-note');
   if (note) note.style.display = 'flex';
   try {
-    const rows = await fetchAllListingsForMap(false);
+    const rows = await fetchAllListingsForMap(force);
     renderListingDots(rows);
+    // A failed load used to look exactly like "no listings" — dots just never
+    // appeared, with no explanation. Say so, and offer a retry.
+    const statusEl = document.getElementById('agent-picker-status');
+    if (allListingsLastError && !rows.length && statusEl) {
+      statusEl.innerHTML = `Couldn't load the listing dots on the map (${chartEsc(describeRegistryError(allListingsLastError))}). <a href="#" id="dots-retry" style="color:var(--green);">Try again</a>`;
+      const retry = document.getElementById('dots-retry');
+      if (retry) retry.addEventListener('click', ev => { ev.preventDefault(); statusEl.textContent = ''; loadListingDotsForMap(true); });
+    }
   } finally {
     if (note) note.style.display = 'none';
   }
@@ -8787,6 +9015,7 @@ function registryRowToListing(row) {
     lat: hadPlaceholderLng ? null : numOrNull(row.lat),
     lng: hadPlaceholderLng ? null : rawLng,
     lastUpdated: row.last_updated || null,
+    agreement: row.listing_agreement === 'Open' ? 'Open' : 'Exclusive', // blank (rows synced before Open Listings existed) = Exclusive
   };
 }
 
@@ -8902,17 +9131,44 @@ async function loadCustomAreaReport(feature) {
   startProgressBar('area-load-progress');
   try {
     const rawRows = await fetchAllListingsForMap(false);
+    if (!rawRows.length && allListingsLastError) {
+      // The registry couldn't be reached — that's different from "nothing is
+      // inside your shape", and used to be reported as the latter.
+      statusEl.textContent = `Couldn't load the listings to search (${describeRegistryError(allListingsLastError)}). Please check your connection and try again — if it keeps happening, let your admin know.`;
+      resetProgressBar('area-load-progress');
+      return;
+    }
     bumpProgressBar('area-load-progress', 35);
-    const matched = rawRows.filter(row => {
+    const matchedSlim = rawRows.filter(row => {
       const lat = numOrNull(row.lat), lng = numOrNull(row.lng);
       if (lat == null || lng == null || isNaN(lat) || isNaN(lng)) return false;
       if (isPlaceholderLng(lng)) return false; // same OMNI-placeholder guard used everywhere else lat/lng gets read
       return pointInGeometry_(lng, lat, feature.geometry);
     });
-    if (matched.length === 0) {
+    if (matchedSlim.length === 0) {
       statusEl.textContent = 'No listings found inside that shape — try drawing a larger area.';
       resetProgressBar('area-load-progress');
       return;
+    }
+    // The map only holds a few columns per listing; the report needs all of
+    // them — but only for the listings actually inside the shape.
+    let matched = matchedSlim;
+    if (allListingsAreSlim) {
+      statusEl.textContent = `Loading the ${matchedSlim.length} listing${matchedSlim.length === 1 ? '' : 's'} inside your area…`;
+      try {
+        const res = await fetchJsonWithRetry(REGISTRY_WEBAPP_URL + '?action=getListingsByIds', { method: 'POST', body: JSON.stringify({ ids: matchedSlim.map(r => r.mls_id) }) });
+        if (!res || !res.success) throw new Error((res && res.error) || 'the registry reported an error');
+        matched = res.listings || [];
+      } catch (err) {
+        statusEl.textContent = `Couldn't load the details for the listings inside your area (${describeRegistryError(err)}). Please try again.`;
+        resetProgressBar('area-load-progress');
+        return;
+      }
+      if (matched.length === 0) {
+        statusEl.textContent = 'No listings found inside that shape — try drawing a larger area.';
+        resetProgressBar('area-load-progress');
+        return;
+      }
     }
 
     mergedListings = {};
@@ -8947,6 +9203,7 @@ async function loadCustomAreaReport(feature) {
     const myOfficeInput = document.getElementById('my-office-input');
     if (myOfficeInput && !myOfficeInput.value.trim()) myOfficeInput.value = '2 Costa Rica Real Estate';
     propertyTypeFilters = new Set(['SFH', 'Condo']); // Agent View default — same as before, just SFH+Condo combined instead of one blended 'Residential' bucket. Land is now also selectable (see the un-hidden Property Type filter row).
+    agreementFilters = new Set(AGREEMENT_PRESETS);
     tableSortIdx = null; tableSortDir = 1;
     resetChartTimeRanges();
     clearSummaryStale();
@@ -8954,6 +9211,7 @@ async function loadCustomAreaReport(feature) {
     beginOffscreenReportRender(); // stay on the picker screen (already showing) — rendered off-screen below, revealed only once fully ready
     renderStatusFilterPills();
     renderPropertyTypeFilterPills();
+    renderAgreementFilterPills();
     renderPriceFilterPills();
     renderStats();
     renderSoldReport();
@@ -9029,6 +9287,7 @@ async function loadAgentReport(area) {
     const myOfficeInput = document.getElementById('my-office-input');
     if (myOfficeInput && !myOfficeInput.value.trim()) myOfficeInput.value = '2 Costa Rica Real Estate';
     propertyTypeFilters = new Set(['SFH', 'Condo']); // Agent View default — same as before, just SFH+Condo combined instead of one blended 'Residential' bucket. Land is now also selectable (see the un-hidden Property Type filter row).
+    agreementFilters = new Set(AGREEMENT_PRESETS);
     tableSortIdx = null; tableSortDir = 1;
     resetChartTimeRanges();
     clearSummaryStale();
@@ -9036,6 +9295,7 @@ async function loadAgentReport(area) {
     beginOffscreenReportRender(); // stay on the picker (already showing, with its own per-card spinner) — rendered off-screen below, revealed only once fully ready
     renderStatusFilterPills();
     renderPropertyTypeFilterPills();
+    renderAgreementFilterPills();
     renderPriceFilterPills();
     renderStats();
     renderSoldReport();
@@ -9241,7 +9501,7 @@ function buildRegistryRows() {
     const matchedAreas = d._matchedAreas || areasContainingPoint(d.lat, d.lng);
     return {
       mls_id: mls, status, status_date: registryStatusDate(d),
-      is_final: registryIsFinal(status), area_tag: matchedAreas.join(', '),
+      is_final: registryIsFinal(status), area_tag: matchedAreas.join(', '), listing_agreement: listingAgreementOf(d),
       property_type: d.propertyType || '', sub_type: d.subType || '',
       list_price: d.price ?? '', original_price: d.originalPrice ?? '', sold_price: d.soldPrice ?? '',
       exchange_rate: d.exchangeRate ?? '', sqm: d.sqm ?? '', lot: d.lot ?? '',
